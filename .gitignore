@@ -1,2 +1,18 @@
-## ignore Visual Studio Code workspace files
+# --- VS Code Specific ---
+.vscode/
 *.code-workspace
+.history/
+
+# --- System & OS ---
+.DS_Store
+Thumbs.db
+
+# --- Logs & Temp ---
+*.log
+*.tmp
+crimetology.code-workspace
+
+
+# --- Data Files ---
+data/*  
+*.csv
