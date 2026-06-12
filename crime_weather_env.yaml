@@ -20,3 +20,4 @@ dependencies:
   - xarray
   - netcdf4
   - dask
+  - beautifulsoup4
