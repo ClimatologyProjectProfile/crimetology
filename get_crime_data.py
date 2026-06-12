@@ -1,9 +1,10 @@
-test push
 #######################################################################
+# This script is deigned to be used with conda env
+# crime_weather env
+#
 # Script to download UK police crime data from 
-# Kaggle and the official rolling archive,
-# consolidate it using DuckDB, and export 
-# a clean Parquet file for analysis.    
+# the official rolling archive
+   
 #######################################################################
 
 
@@ -11,87 +12,102 @@ test push
 # %% Import modules
 import os
 import duckdb
-import kaggle
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
-# Note: kaggle credential need to be set up  
-# in ~/.kaggle/access_token
+###########################################################
+# %%User Inputs 
+get_data = False
+del_archive_data = False
+
 
 ############################################################
 # %%
 # Create a data directory if it doesn't exist
-os.makedirs('data', exist_ok=True)
+# Get the current working directory
+cwd = os.getcwd()
+
+data_dir = cwd+'/data/police_archives/'
+os.makedirs(data_dir, exist_ok=True)
+
+base_url = "https://data.police.uk/data/archive/"
+
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+
+def download_archives():
+    print(f"Connecting to {base_url}...")
+    response = requests.get(base_url, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Find all links ending in .zip
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if href.endswith('.zip'):
+            file_url = urljoin(base_url, href)
+            file_name = href.split('/')[-1]
+            file_path = os.path.join(data_dir, file_name)
+
+            if not os.path.exists(file_path):
+                print(f"Downloading {file_name}...")
+                try:
+                    # stream=True is more efficient for large ZIP files
+                    with requests.get(file_url, headers=headers, stream=True) as r:
+                        r.raise_for_status() # Check for errors
+                        with open(file_path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                    print(f"Finished {file_name}")
+                except Exception as e:
+                    print(f"Failed to download {file_name}: {e}")
+            else:
+                print(f"Skipping {file_name}, already exists.")
+
+if get_data:
+    download_archives()
+#time taken to run (12/06/2026): 
 
 
-# --- 2. DOWNLOAD HISTORICAL DATA FROM KAGGLE API ---
-print("Downloading historical data via Kaggle API...")
-# This downloads the mexwell/uk-police-data dataset and automatically unzips it
-kaggle.api.dataset_download_files(
-    'mexwell/uk-police-data', 
-    path='data/kaggle_uk_police', 
-    unzip=True
-)
-print("Kaggle download and extraction complete!")
+if del_archive_data:
+    for file_name in os.listdir(data_dir):
+        if file_name.endswith('.zip'):
+            file_path = os.path.join(data_dir, file_name)
+            os.remove(file_path)
+            print(f"Deleted {file_name}")
 
-
-# --- 3. DUCKDB CONSOLIDATION PIPELINE ---
-print("\nInitializing DuckDB engine...")
-con = duckdb.connect('crime_weather.db')
+###########################################################
+# %% make a local duckDB
+print("Initializing DuckDB engine...")
+con = duckdb.connect('data/crime_archive.db')
 
 # Install and load the httpfs extension so DuckDB can read URLs directly
 con.execute("INSTALL httpfs; LOAD httpfs;")
 
-# URL format for data.police.uk rolling 3-year archives
-# We can dynamically target the latest file (e.g., '2024-12.zip' or similar)
-latest_archive_url = "https://data.police.uk/data/archive/2024-12.zip"
+#HERE - need to now open and read the 
+# zipped data files, and combine them into a single table
 
-print(f"Streaming and merging data from official rolling archive URL and local Kaggle files...")
-
-# SQL Query that streams from the web AND reads the local extracted Kaggle files,
-# uses UNION to drop duplicates, filters out null coordinates, and maps street records.
-build_query = f"""
-CREATE OR REPLACE VIEW unified_crime_raw AS
-
--- Source A: Official rolling archive streamed directly over HTTP
-SELECT 
-    "Month" AS month,
-    "Crime type" AS crime_type,
-    CAST("Latitude" AS DOUBLE) AS lat,
-    CAST("Longitude" AS DOUBLE) AS lon
-FROM read_csv_auto('{latest_archive_url}/**/*.csv')
-WHERE "Latitude" IS NOT NULL 
-  AND "Longitude" IS NOT NULL
-  AND File_Name LIKE '%street%'
-
-UNION
-
--- Source B: Historical Kaggle files downloaded via API
-SELECT 
-    "Month" AS month,
-    "Crime type" AS crime_type,
-    CAST("Latitude" AS DOUBLE) AS lat,
-    CAST("Longitude" AS DOUBLE) AS lon
-FROM read_csv_auto('data/kaggle_uk_police/**/*.csv')
-WHERE "Latitude" IS NOT NULL 
-  AND "Longitude" IS NOT NULL
-  AND File_Name LIKE '%street%';
-"""
-
-con.execute(build_query)
-print("Unified dataset compiled in memory. Exporting to Parquet...")
-
-# Export sorted dataset to Parquet
-con.execute("""
-    COPY (
-        SELECT month, crime_type, lat, lon 
-        FROM unified_crime_raw
-        ORDER BY month, crime_type
-    ) TO 'combined_crime_data.parquet' (FORMAT PARQUET);
+con.sql("""
+SELECT * FROM read_csv('"""+str(data_dir)+"""2025-04.zip');
 """)
 
-print("Success! 'combined_crime_data.parquet' is ready.")
+
+# get all the data into a single table
+con.sql("""
+CREATE OR REPLACE TABLE all_crime_data AS 
+SELECT 
+    date, 
+    "Crime type" as crime_type, 
+    latitude as lat, 
+    longitude as lon
+FROM read_csv_auto('""" + str(data_dir) + """*.zip/*.csv', union_by_name=True)
+WHERE latitude IS NOT NULL
+""")
 
 
-# --- 4. VERIFY RESULTS ---
+
+
+
+# %%
 summary = con.execute("""
     SELECT 
         MIN(month) as earliest_month, 
