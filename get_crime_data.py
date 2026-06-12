@@ -10,6 +10,8 @@
 
 ###########################################################
 # %% Import modules
+import zipfile
+import glob
 import os
 import duckdb
 import requests
@@ -19,7 +21,7 @@ from urllib.parse import urljoin
 ###########################################################
 # %%User Inputs 
 get_data = False
-del_archive_data = False
+del_archive_zips = True
 
 
 ############################################################
@@ -65,31 +67,54 @@ def download_archives():
 
 if get_data:
     download_archives()
-#time taken to run (12/06/2026): 
+#time taken to run (12/06/2026): 1.5 hrs
+
+# unzip the files, as duckdb couldnt sniff them....
+if get_data:
+    zip_dir = data_dir
+    out_dir = cwd+'/data/police_archives_csvs/'
+    for zip_file in glob.glob(os.path.join(zip_dir, "*.zip")):
+        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+            zip_ref.extractall(out_dir)
+#time taken to run (12/06/2026): inf.... manual interrupt. 
 
 
-if del_archive_data:
+if del_archive_zips:
     for file_name in os.listdir(data_dir):
         if file_name.endswith('.zip'):
             file_path = os.path.join(data_dir, file_name)
             os.remove(file_path)
             print(f"Deleted {file_name}")
 
+#TODO - turns csv files into parquet, and then delete the csv files and zips.
+
+
 ###########################################################
 # %% make a local duckDB
 print("Initializing DuckDB engine...")
 con = duckdb.connect('data/crime_archive.db')
 
-# Install and load the httpfs extension so DuckDB can read URLs directly
-con.execute("INSTALL httpfs; LOAD httpfs;")
+
+# data desc is here: https://data.police.uk/about/#columns
 
 #HERE - need to now open and read the 
 # zipped data files, and combine them into a single table
+
+sniffer_result = con.sql(f"SELECT * FROM sniff_csv("str(data_dir)+"'2025-04.zip').fetchone()
 
 con.sql("""
 SELECT * FROM read_csv('"""+str(data_dir)+"""2025-04.zip');
 """)
 
+con.sql(f"""
+    SELECT * FROM read_csv(
+        '{data_dir}2025-04.zip', 
+        header=True, 
+        delim=',', 
+        quote='"',
+        sample_size=-1  -- Force it to read the whole file to detect types
+    );
+""")
 
 # get all the data into a single table
 con.sql("""
