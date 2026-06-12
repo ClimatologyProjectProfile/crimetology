@@ -16,7 +16,6 @@ dependencies:
   - duckdb
   - harlequin
   - requests
-  - kaggle
   - xarray
   - netcdf4
   - dask
