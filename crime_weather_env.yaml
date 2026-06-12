@@ -1,0 +1,22 @@
+name: crime_weather
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - jupyterlab
+  - notebook
+  - pandas
+  - pyarrow
+  - matplotlib
+  - seaborn
+  - scipy
+  - statsmodels
+  - scikit-learn
+  - duckdb
+  - harlequin
+  - requests
+  - kaggle
+  - xarray
+  - netcdf4
+  - dask
