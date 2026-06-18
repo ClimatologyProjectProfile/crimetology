@@ -25,7 +25,6 @@ from pathlib import Path
 get_data = True
 del_archive_zips = True
 
-
 ############################################################
 # %%
 # Create a data directory if it doesn't exist
@@ -40,9 +39,12 @@ data_dir.mkdir(parents=True, exist_ok=True)
 out_dir = Path(cwd) / 'data' / 'police_archives' / 'csvs'
 out_dir.mkdir(parents=True, exist_ok=True)
 
+# create a log file to track which csvs
+# have been added to the duckdb
+log_file = data_dir / 'ingested_csvs.txt'
+
 # archived data location (where to source zips from)
 base_url = "https://data.police.uk/data/archive/"
-
 
 # set up download function
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
@@ -61,6 +63,10 @@ def download_archives(out_dir:Path):
             download_file_name = href.split('/')[-1]
             # isolate just the stem (i.e. file name)
             file_stem = Path(download_file_name).stem
+            # ignore the nerighbourhood and latest data zips
+            if 'neighbourhood' in file_stem or 'latest' in file_stem:
+                print(f"Skipping {download_file_name}, not a street data archive.")
+                continue
             # create a pattern to search output directory for unzipped files
             dir_path = out_dir / file_stem 
 
@@ -84,6 +90,7 @@ def download_archives(out_dir:Path):
                     print(f"Failed to download {download_file_name}: {e}")
 
 
+# ===============================================================================================#
 # %% Routine to download and unzip any new archive files
 
 if get_data:
@@ -126,63 +133,82 @@ if get_data:
     
 
 
-#time taken to run (12/06/2026): 1.5 hrs
-#time taken to run (12/06/2026): inf.... manual interrupt. 
+# %%  Duck DB update routine
+# ===============================================================================================#
+# # %% Add archived data to a local duckdb database
 
-#TODO - turns csv files into parquet, and then delete the csv files and zips.
+## Helper Functions
+def is_already_processed(file_name):
+    """Check if the file has been processed in a previous run."""
+    if not os.path.exists(log_file):
+        return False
+    with open(log_file, 'r') as f:
+        processed = f.read().splitlines()
+        # if processed already return True, else False
+    return file_name in processed
+
+def mark_as_processed(file_name):
+    """Record a file as processed."""
+    with open(log_file, 'a') as f:
+        f.write(f"{file_name}\n")
+
+def initialize_database(con, example_file_path:str|os.PathLike):    
+    # Create the table if it doesn't exist
+    # LIMIT 0 == get the column headers/types without importing data
+    con.execute(f"""CREATE TABLE IF NOT EXISTS street_data AS 
+                    SELECT * FROM read_csv_auto('{example_file_path}') LIMIT 0""")
+    # Add index for efficient lookups on Crime_ID
+    con.execute("""CREATE INDEX IF NOT EXISTS idx_crime_id ON street_data("Crime ID")""")
+
+def update_duckdb(csv_paths:list[str|os.PathLike]):
+    # put database at top level of data_dir
+    con = duckdb.connect(data_dir/'crime_archive.db')
+    # create the datatable if it doesn't exist  
+    # Use the first CSV to initialize the table structure
+    initialize_database(con, csv_paths[0]) 
+    # Now ingest data from each CSV, skipping those already logged
+    for csv_path in csv_paths:
+        file_name = os.path.basename(csv_path)
+        
+        # Skip if already logged
+        if is_already_processed(file_name):
+            continue
+            
+        print(f"Ingesting {file_name}...")
+        try:
+            # use union by name incase the schema changes slightly between files (e.g., new columns added)
+            con.execute(f"""INSERT INTO street_data
+                            SELECT * FROM read_csv_auto('{csv_path}', union_by_name=True) AS new_data
+                            WHERE NOT EXISTS (SELECT 1 FROM street_data AS main 
+                                              WHERE main."Crime ID" = new_data."Crime ID")
+                        ;""")
+        
+            # Only log success AFTER database update is complete
+            print(f"Processed {file_name}...")
+            mark_as_processed(file_name)
+        except Exception as e:
+            print(f"Failed to process {file_name}: {e}")
+    # finish up by closing the connection
+    con.close()
 
 
-###########################################################
-# %% make a local duckDB
-print("Initializing DuckDB engine...")
-con = duckdb.connect('data/crime_archive.db')
+# Now run duckdb update on all csvs in out_dir
+# checking against the log file to avoid duplicates
+
+# find all *-street.csv files in the out_dir and its subdirectories
+csv_files_list = glob.glob(os.path.join(data_dir, "**", "*-street.csv"), recursive=True)
+
+## Run database update
+print("Found "+str(len(csv_files_list))+" csv files")
+
+# %%  Duck DB update routine
+# ===============================================================================================#
+
+# Run Update
+print("Updating duckdb database with new csv files...")
+update_duckdb(csv_files_list)
+print("=== Finished updating duckdb database ===")
+
+# ===============================================================================================#
 
 
-# data desc is here: https://data.police.uk/about/#columns
-
-#HERE - need to now open and read the 
-# zipped data files, and combine them into a single table
-
-
-con.sql("""
-SELECT * FROM read_csv('"""+str(data_dir)+"""2025-04.zip');
-""")
-
-con.sql(f"""
-    SELECT * FROM read_csv(
-        '{data_dir}2025-04.zip', 
-        header=True, 
-        delim=',', 
-        quote='"',
-        sample_size=-1  -- Force it to read the whole file to detect types
-    );
-""")
-
-# get all the data into a single table
-con.sql("""
-CREATE OR REPLACE TABLE all_crime_data AS 
-SELECT 
-    date, 
-    "Crime type" as crime_type, 
-    latitude as lat, 
-    longitude as lon
-FROM read_csv_auto('""" + str(data_dir) + """*.zip/*.csv', union_by_name=True)
-WHERE latitude IS NOT NULL
-""")
-
-
-
-
-
-# %%
-summary = con.execute("""
-    SELECT 
-        MIN(month) as earliest_month, 
-        MAX(month) as latest_month, 
-        COUNT(*) as total_crimes 
-    FROM 'combined_crime_data.parquet'
-""").fetchall()
-
-print(f"\nFinal Dataset Summary:")
-print(f"Time Range: {summary[0][0]} to {summary[0][1]}")
-print(f"Total Rows Processed: {summary[0][2]:,}")
