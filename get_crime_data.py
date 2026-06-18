@@ -11,6 +11,7 @@
 ###########################################################
 # %% Import modules
 import zipfile
+import time
 import glob
 import os
 import duckdb
@@ -185,9 +186,13 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
         
             # Only log success AFTER database update is complete
             print(f"Processed {file_name}...")
+            # pause, dont hammer the server because that is just rude. 
+            time.sleep(2)
             mark_as_processed(file_name)
         except Exception as e:
             print(f"Failed to process {file_name}: {e}")
+            # pause, as above. 
+            time.sleep(2)
     # finish up by closing the connection
     con.close()
 
