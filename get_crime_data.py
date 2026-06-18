@@ -17,10 +17,12 @@ import duckdb
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from pathlib import Path
+
 
 ###########################################################
 # %%User Inputs 
-get_data = False
+get_data = True
 del_archive_zips = True
 
 
@@ -30,14 +32,22 @@ del_archive_zips = True
 # Get the current working directory
 cwd = os.getcwd()
 
-data_dir = cwd+'/data/police_archives/'
-os.makedirs(data_dir, exist_ok=True)
+#data dir for archives downloads (zips)
+data_dir = Path(cwd) / 'data' / 'police_archives'
+data_dir.mkdir(parents=True, exist_ok=True)
 
+# set the unzip location
+out_dir = Path(cwd) / 'data' / 'police_archives' / 'csvs'
+out_dir.mkdir(parents=True, exist_ok=True)
+
+# archived data location (where to source zips from)
 base_url = "https://data.police.uk/data/archive/"
 
+
+# set up download function
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 
-def download_archives():
+def download_archives(out_dir:Path):
     print(f"Connecting to {base_url}...")
     response = requests.get(base_url, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -47,44 +57,77 @@ def download_archives():
         href = link['href']
         if href.endswith('.zip'):
             file_url = urljoin(base_url, href)
-            file_name = href.split('/')[-1]
-            file_path = os.path.join(data_dir, file_name)
+            # get the file name from the URL with *.zip suffix
+            download_file_name = href.split('/')[-1]
+            # isolate just the stem (i.e. file name)
+            file_stem = Path(download_file_name).stem
+            # create a pattern to search output directory for unzipped files
+            dir_path = out_dir / file_stem 
 
-            if not os.path.exists(file_path):
-                print(f"Downloading {file_name}...")
+            # now see if this path exists (meaning that data has been 
+            # extracted from the zip file already)
+            if dir_path.exists() and dir_path.is_dir():
+                print(f"Skipping {download_file_name}, already exists and is unzipped.")
+            else:
+                # file has not been unzipped yet, so download it
+                download_path = data_dir / download_file_name
+                print(f"Downloading {download_file_name}...")
                 try:
                     # stream=True is more efficient for large ZIP files
                     with requests.get(file_url, headers=headers, stream=True) as r:
                         r.raise_for_status() # Check for errors
-                        with open(file_path, 'wb') as f:
+                        with open(download_path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                    print(f"Finished {file_name}")
+                    print(f"Finished {download_file_name}")
                 except Exception as e:
-                    print(f"Failed to download {file_name}: {e}")
-            else:
-                print(f"Skipping {file_name}, already exists.")
+                    print(f"Failed to download {download_file_name}: {e}")
+
+
+# %% Routine to download and unzip any new archive files
 
 if get_data:
-    download_archives()
+    # get any new zip files available from the archive site
+    # checking against previously unzipped downloads in 
+    # 'out_dir'
+    print('----------------------------------------------')
+    print(f"Checking for new archive files to download...")
+    download_archives(out_dir)
+    print('----------------------------------------------')
+    # now unzip any downloads 
+    print(f"Processing archive files in {data_dir}...")
+
+    # Find all zip files
+    zip_files = glob.glob(os.path.join(data_dir, "*.zip"))
+
+    if not zip_files:
+        print("No zip files found to process.")
+
+    for zip_file_path in zip_files:
+        try:
+            print(f"Extracting {os.path.basename(zip_file_path)}...")
+            with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+                zip_ref.extractall(out_dir)
+            
+            # Successfully extracted, now safely remove
+            if del_archive_zips:
+                os.remove(zip_file_path)
+                print(f"Successfully extracted and removed {os.path.basename(zip_file_path)}")
+            
+        except zipfile.BadZipFile:
+            print(f"Error: {os.path.basename(zip_file_path)} is corrupted. Skipping.")
+        except Exception as e:
+            print(f"An unexpected error occurred with {os.path.basename(zip_file_path)}: {e}")
+
+    print('----------------------------------------------')
+    print('Finished processing archive files.')
+    print('----------------------------------------------')
+
+    
+
+
 #time taken to run (12/06/2026): 1.5 hrs
-
-# unzip the files, as duckdb couldnt sniff them....
-if get_data:
-    zip_dir = data_dir
-    out_dir = cwd+'/data/police_archives_csvs/'
-    for zip_file in glob.glob(os.path.join(zip_dir, "*.zip")):
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-            zip_ref.extractall(out_dir)
 #time taken to run (12/06/2026): inf.... manual interrupt. 
-
-
-if del_archive_zips:
-    for file_name in os.listdir(data_dir):
-        if file_name.endswith('.zip'):
-            file_path = os.path.join(data_dir, file_name)
-            os.remove(file_path)
-            print(f"Deleted {file_name}")
 
 #TODO - turns csv files into parquet, and then delete the csv files and zips.
 
@@ -100,7 +143,6 @@ con = duckdb.connect('data/crime_archive.db')
 #HERE - need to now open and read the 
 # zipped data files, and combine them into a single table
 
-sniffer_result = con.sql(f"SELECT * FROM sniff_csv("str(data_dir)+"'2025-04.zip').fetchone()
 
 con.sql("""
 SELECT * FROM read_csv('"""+str(data_dir)+"""2025-04.zip');
