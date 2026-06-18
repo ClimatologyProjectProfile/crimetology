@@ -48,7 +48,7 @@ log_file = data_dir / 'ingested_csvs.txt'
 base_url = "https://data.police.uk/data/archive/"
 
 # set up download function
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+headers = {'User-Agent': 'StreetDataDownloader/1.0 (github.com/ClimatologyProjectProfile)'}
 
 def download_archives(out_dir:Path):
     print(f"Connecting to {base_url}...")
