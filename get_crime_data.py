@@ -38,6 +38,8 @@ del_archive_zips = True
 # Get the current working directory
 cwd = os.getcwd()
 
+temp_dir_path = Path(cwd) / ' temp_dir.tmp' 
+
 #data dir for archives downloads (zips)
 data_dir = Path(cwd) / 'data' / 'police_archives'
 data_dir.mkdir(parents=True, exist_ok=True)
@@ -184,9 +186,12 @@ def initialize_database(con, example_file_path:str|os.PathLike):
 con.execute('CREATE UNIQUE INDEX idx_crime_id ON street_data("Crime ID")')
 
 
+
 def update_duckdb(csv_paths:list[str|os.PathLike]):
     # put database at top level of data_dir
     con = duckdb.connect(data_dir/'crime_archive.db')
+    #enable a temp memory space to allow duckdb to spill to local
+    con.execute(f"""SET temp_directory = '{temp_dir_path}';""")
     # create the datatable if it doesn't exist  
     # Use the first CSV to initialize the table structure
     initialize_database(con, csv_paths[0]) 
