@@ -172,19 +172,32 @@ def mark_as_processed(file_name):
     with open(log_file, 'a') as f:
         f.write(f"{file_name}\n")
 
-def initialize_database(con, example_file_path:str|os.PathLike):    
-    # Create the table if it doesn't exist
+def initialize_database(con, example_file_path:str|os.PathLike):
+    # make a table with the correct schema if it doesn't exist
+    # CRIME ID as primary key to ensure unique 
+    # contraint for fast index    
+    con.execute("""CREATE TABLE street_data ("Crime ID" VARCHAR PRIMARY KEY,
+                                             "Month" VARCHAR,
+                                             "Reported by" VARCHAR,
+                                             "Falls within" VARCHAR,
+                                             "Longitude" DOUBLE,
+                                             "Latitude" DOUBLE,
+                                             "Location" VARCHAR,
+                                             "LSOA code" VARCHAR,
+                                             "LSOA name" VARCHAR,
+                                             "Crime type" VARCHAR,
+                                             "Last outcome category" VARCHAR,
+                                             "Context" VARCHAR);""")
 
-    # LIMIT 0 == get the column headers/types without importing data
-    con.execute(f"""CREATE TABLE IF NOT EXISTS street_data AS 
-                    SELECT * FROM read_csv_auto('{example_file_path}') LIMIT 0""")
-    # Add index for efficient lookups on Crime_ID
-    con.execute("""CREATE UNIQUE INDEX idx_crime_id ON street_data("Crime ID")""")
+months = con.execute("""SELECT DISTINCT "Month"
+FROM street_data
+ORDER BY "Month";""").fetchall()
 
-
-# 5. Finally, create the unique index now that the data is clean
-con.execute('CREATE UNIQUE INDEX idx_crime_id ON street_data("Crime ID")')
-
+for month in months:
+    con.execute(f"""INSERT INTO street_data_new
+                    SELECT *
+                    FROM street_data
+                    WHERE "Month" = '{month[0]}';""")
 
 
 def update_duckdb(csv_paths:list[str|os.PathLike]):
@@ -206,9 +219,12 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
         try:
             # use union by name incase the schema changes slightly between files (e.g., new columns added)
             con.execute(f"""INSERT OR IGNORE INTO street_data
-                            SELECT * FROM read_csv_auto('{csv_path}', union_by_name=True)
---                           --WHERE NOTEXISTS (SELECT 1 FROM street_data AS main 
---                           --                WHERE main."Crime ID" = new_data."Crime ID")
+                            SELECT 
+                            -- Manually deal with Crime ID (either use theirs or make a synthetic one if missing)
+                            COALESCE(NULLIF("Crime ID", ''), 'NO_ID_' || uuid()) AS "Crime ID",
+                             -- Now add eveything else
+                            * EXCLUDE ("Crime ID")
+                            FROM read_csv_auto('{csv_path}', union_by_name=True);
                         ;""")
         
             # Only log success AFTER database update is complete
