@@ -4,7 +4,13 @@
 #
 # Script to download UK police crime data from 
 # the official rolling archive
-   
+#  
+# Script is in two halves - first downloads and unzips new archive data, 
+# second ingests into local duckdb database.
+# 
+#  ! Initial run is slow - duckdb method here is inefficient for 
+#  large data sets, but it is a simple approach to get started.   
+#  Needs to be improved for future runs/batched.
 #######################################################################
 
 
@@ -23,11 +29,11 @@ from pathlib import Path
 
 ###########################################################
 # %%User Inputs 
-get_data = True
+get_data = False
 del_archive_zips = True
 
 ############################################################
-# %%
+# %% Setup directories and paths
 # Create a data directory if it doesn't exist
 # Get the current working directory
 cwd = os.getcwd()
@@ -47,9 +53,24 @@ log_file = data_dir / 'ingested_csvs.txt'
 # archived data location (where to source zips from)
 base_url = "https://data.police.uk/data/archive/"
 
-# set up download function
+# ===============================================================================================#
+# %% Load in Download function
+
+## Helper Function
+## Only download needed data
+def is_already_processed(file_name):
+    """Check if the file has been processed in a previous run."""
+    if not os.path.exists(log_file):
+        return False
+    with open(log_file, 'r') as f:
+        processed = f.read().splitlines()
+        # if processed already return True, else False
+    return file_name in processed
+
+## set up download function
 headers = {'User-Agent': 'StreetDataDownloader/1.0 (github.com/ClimatologyProjectProfile)'}
 
+## Download function
 def download_archives(out_dir:Path):
     print(f"Connecting to {base_url}...")
     response = requests.get(base_url, headers=headers)
@@ -68,13 +89,10 @@ def download_archives(out_dir:Path):
             if 'neighbourhood' in file_stem or 'latest' in file_stem:
                 print(f"Skipping {download_file_name}, not a street data archive.")
                 continue
-            # create a pattern to search output directory for unzipped files
-            dir_path = out_dir / file_stem 
 
-            # now see if this path exists (meaning that data has been 
-            # extracted from the zip file already)
-            if dir_path.exists() and dir_path.is_dir():
-                print(f"Skipping {download_file_name}, already exists and is unzipped.")
+            # now see if the data has been added to duckdb before
+            if is_already_processed(file_stem):
+                print(f"Skipping {download_file_name}, already ingested.")
             else:
                 # file has not been unzipped yet, so download it
                 download_path = data_dir / download_file_name
@@ -91,8 +109,8 @@ def download_archives(out_dir:Path):
                     print(f"Failed to download {download_file_name}: {e}")
 
 
-# ===============================================================================================#
-# %% Routine to download and unzip any new archive files
+
+# %% Run download function and unzip as we go
 
 if get_data:
     # get any new zip files available from the archive site
@@ -133,10 +151,9 @@ if get_data:
 
     
 
-
-# %%  Duck DB update routine
 # ===============================================================================================#
-# # %% Add archived data to a local duckdb database
+# %%  Duck DB update routine
+# Ingest archived data into local duckdb database
 
 ## Helper Functions
 def is_already_processed(file_name):
@@ -207,12 +224,12 @@ csv_files_list = glob.glob(os.path.join(data_dir, "**", "*-street.csv"), recursi
 print("Found "+str(len(csv_files_list))+" csv files")
 
 # %%  Duck DB update routine
-# ===============================================================================================#
 
-# Run Update
-print("Updating duckdb database with new csv files...")
-update_duckdb(csv_files_list)
-print("=== Finished updating duckdb database ===")
+# Run Update (only is new csvs are found)
+if len(csv_files_list) > 0:
+    print("Updating duckdb database with new csv files...")
+    update_duckdb(csv_files_list)
+    print("=== Finished updating duckdb database ===")
 
 # ===============================================================================================#
 
