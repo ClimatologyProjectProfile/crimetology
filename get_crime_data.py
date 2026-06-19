@@ -176,7 +176,12 @@ def initialize_database(con, example_file_path:str|os.PathLike):
     con.execute(f"""CREATE TABLE IF NOT EXISTS street_data AS 
                     SELECT * FROM read_csv_auto('{example_file_path}') LIMIT 0""")
     # Add index for efficient lookups on Crime_ID
-    con.execute("""CREATE INDEX IF NOT EXISTS idx_crime_id ON street_data("Crime ID")""")
+    con.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_crime_id ON street_data("Crime ID")""")
+
+## accidentally missed unique, which is why this is so slow
+#con.execute("DROP INDEX IF EXISTS idx_crime_id")
+#con.execute("CREATE UNIQUE INDEX idx_crime_id ON street_data('Crime ID')")
+
 
 def update_duckdb(csv_paths:list[str|os.PathLike]):
     # put database at top level of data_dir
@@ -184,10 +189,11 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
     # create the datatable if it doesn't exist  
     # Use the first CSV to initialize the table structure
     initialize_database(con, csv_paths[0]) 
+    # sanity check - ensure index exists for efficient lookups on Crime_ID
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_crime_id ON street_data('Crime ID');")
     # Now ingest data from each CSV, skipping those already logged
     for csv_path in csv_paths:
         file_name = os.path.basename(csv_path)
-        
         # Skip if already logged
         if is_already_processed(file_name):
             continue
@@ -195,10 +201,10 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
         print(f"Ingesting {file_name}...")
         try:
             # use union by name incase the schema changes slightly between files (e.g., new columns added)
-            con.execute(f"""INSERT INTO street_data
-                            SELECT * FROM read_csv_auto('{csv_path}', union_by_name=True) AS new_data
-                            WHERE NOT EXISTS (SELECT 1 FROM street_data AS main 
-                                              WHERE main."Crime ID" = new_data."Crime ID")
+            con.execute(f"""INSERT OR IGNORE INTO street_data
+                            SELECT * FROM read_csv_auto('{csv_path}', union_by_name=True)
+--                           --WHERE NOTEXISTS (SELECT 1 FROM street_data AS main 
+--                           --                WHERE main."Crime ID" = new_data."Crime ID")
                         ;""")
         
             # Only log success AFTER database update is complete
@@ -206,6 +212,8 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
             # pause, dont hammer the server because that is just rude. 
             time.sleep(2)
             mark_as_processed(file_name)
+            # delete the csv
+            os.remove(csv_path)
         except Exception as e:
             print(f"Failed to process {file_name}: {e}")
             # pause, as above. 
