@@ -172,15 +172,16 @@ def mark_as_processed(file_name):
 
 def initialize_database(con, example_file_path:str|os.PathLike):    
     # Create the table if it doesn't exist
+
     # LIMIT 0 == get the column headers/types without importing data
     con.execute(f"""CREATE TABLE IF NOT EXISTS street_data AS 
                     SELECT * FROM read_csv_auto('{example_file_path}') LIMIT 0""")
     # Add index for efficient lookups on Crime_ID
-    con.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_crime_id ON street_data("Crime ID")""")
+    con.execute("""CREATE UNIQUE INDEX idx_crime_id ON street_data("Crime ID")""")
 
-## accidentally missed unique, which is why this is so slow
-#con.execute("DROP INDEX IF EXISTS idx_crime_id")
-#con.execute("CREATE UNIQUE INDEX idx_crime_id ON street_data('Crime ID')")
+
+# 5. Finally, create the unique index now that the data is clean
+con.execute('CREATE UNIQUE INDEX idx_crime_id ON street_data("Crime ID")')
 
 
 def update_duckdb(csv_paths:list[str|os.PathLike]):
@@ -189,8 +190,6 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
     # create the datatable if it doesn't exist  
     # Use the first CSV to initialize the table structure
     initialize_database(con, csv_paths[0]) 
-    # sanity check - ensure index exists for efficient lookups on Crime_ID
-    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_crime_id ON street_data('Crime ID');")
     # Now ingest data from each CSV, skipping those already logged
     for csv_path in csv_paths:
         file_name = os.path.basename(csv_path)
