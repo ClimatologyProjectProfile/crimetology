@@ -192,7 +192,6 @@ def initialize_database(con, example_file_path:str|os.PathLike):
 
 # %%
 
-
 def update_duckdb(csv_paths:list[str|os.PathLike]):
     # put database at top level of data_dir
     con = duckdb.connect(data_dir/'crime_archive.db')
@@ -216,7 +215,11 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
         # manually dedupe in chunks as not enough local RAM to form primary key :S
         try:
             query = f"""INSERT INTO street_data
-                        SELECT * FROM read_csv_auto(?, union_by_name=True) AS new_data
+                        SELECT 
+                         -- Manually deal with Crime ID (either use theirs or make a synthetic one if missing)
+                        COALESCE(NULLIF("Crime ID", ''), 'NO_ID_' || uuid()) AS "Crime ID",
+                        * EXCLUDE ("Crime ID")
+                        FROM read_csv_auto(?, union_by_name=True) AS new_data
                         WHERE NOT EXISTS (SELECT 1 
                                             FROM street_data AS existing 
                                             WHERE existing."Crime ID" = new_data."Crime ID");"""
@@ -231,7 +234,24 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
             print(f"Failed to process {file_name}: {e}")
             # pause, as above. 
             time.sleep(2)
-    # finish up by closing the connection
+    # remove duplicates (crimes updated)
+    try:
+        con.execute("""CREATE OR REPLACE TABLE cleaned_street_data AS
+                            SELECT * EXCLUDE row_num
+                            FROM (SELECT *, ROW_NUMBER() 
+                                    OVER (PARTITION BY "CRIME ID" 
+                                    ORDER BY "Month" DESC) as row_num
+                                  FROM street_data)
+                            WHERE row_num = 1;""")
+        # if successfully cleaned swap out data
+        try:  
+            con.execute("DROP TABLE street_data;")
+            con.execute("ALTER TABLE cleaned_street_data RENAME TO street_data;")
+        except Exception as e:
+            print(f"street_data failed to dedup and update: {e}")
+    except Exception as e:
+        print(f"Failed to remove duplicates: {e}")
+    # All done and made it to the end so close
     con.close()
 
 
@@ -253,5 +273,3 @@ if len(csv_files_list) > 0:
     print("=== Finished updating duckdb database ===")
 
 # ===============================================================================================#
-
-
