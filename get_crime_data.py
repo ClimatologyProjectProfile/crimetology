@@ -28,11 +28,13 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from pathlib import Path
+import re
+import pandas as pd
 
 
 ###########################################################
 # %%User Inputs 
-get_data = False
+get_data = True
 del_archive_zips = True
 
 ############################################################
@@ -69,9 +71,30 @@ def is_already_processed(file_name):
         return False
     with open(log_file, 'r') as f:
         processed = f.read().splitlines()
-        print(processed[0])
         # if processed already return True, else False
     return file_name in processed
+
+def date_processed(date_in):
+    # if no log quickly exit
+    if not os.path.exists(log_file):
+        return
+    #otherwise
+    # pattern to pull months
+    pattern = r'(\d{4}-\d{2})'
+    dates = []
+    with open(log_file, 'r') as f:
+        processed = f.read().splitlines()
+        #pull all matchign patterns
+        for line in processed:
+            dates.append(re.search(pattern, line).group(1))
+    # keep just one for reference
+    dates = list(set(dates))
+    #Retrun True if Present, False otherwise
+    date_to_check = re.search(pattern, date_in).group(1)
+    return( date_to_check in dates )
+
+
+
 
 ## set up download function
 headers = {'User-Agent': 'StreetDataDownloader/1.0 (github.com/ClimatologyProjectProfile)'}
@@ -96,9 +119,8 @@ def download_archives(out_dir:Path):
                 print(f"Skipping {download_file_name}, not a street data archive.")
                 continue
 
-            # now see if the data has been added to duckdb before
-            if is_already_processed(file_stem):
-                print(f"Skipping {download_file_name}, already ingested.")
+            if date_processed(file_stem):
+                print(f"Skipping {download_file_name}, date already processed.")
             else:
                 # file has not been unzipped yet, so download it
                 download_path = data_dir / download_file_name
