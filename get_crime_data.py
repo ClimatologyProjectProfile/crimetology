@@ -189,15 +189,14 @@ def initialize_database(con, example_file_path:str|os.PathLike):
                                              "Last outcome category" VARCHAR,
                                              "Context" VARCHAR);""")
 
-months = con.execute("""SELECT DISTINCT "Month"
-FROM street_data
-ORDER BY "Month";""").fetchall()
+# %%
 
-for month in months:
-    con.execute(f"""INSERT INTO street_data_new
-                    SELECT *
-                    FROM street_data
-                    WHERE "Month" = '{month[0]}';""")
+# Set memory limits and temp, to avoid crashing
+con.execute("SET memory_limit='7GB'")
+con.execute("SET streaming_buffer_size = '4GB';")
+con.execute("SET temp_directory = temp_dir_path;")
+con.execute("SET preserve_insertion_order = false;")
+
 
 
 def update_duckdb(csv_paths:list[str|os.PathLike]):
@@ -219,11 +218,12 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
         try:
             # use union by name incase the schema changes slightly between files (e.g., new columns added)
             con.execute(f"""INSERT OR IGNORE INTO street_data
-                            SELECT 
-                            -- Manually deal with Crime ID (either use theirs or make a synthetic one if missing)
-                            COALESCE(NULLIF("Crime ID", ''), 'NO_ID_' || uuid()) AS "Crime ID",
-                             -- Now add eveything else
-                            * EXCLUDE ("Crime ID")
+                            SELECT * FROM (
+                                    SELECT DISTINCT
+                                     -- Manually deal with Crime ID (either use theirs or make a synthetic one if missing)
+                                    COALESCE(NULLIF("Crime ID", ''), 'NO_ID_' || uuid()) AS "Crime ID",
+                                    -- Now add eveything else
+                                    * EXCLUDE ("Crime ID"))
                             FROM read_csv_auto('{csv_path}', union_by_name=True);
                         ;""")
         
