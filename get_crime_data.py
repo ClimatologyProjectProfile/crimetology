@@ -66,6 +66,7 @@ def is_already_processed(file_name):
         return False
     with open(log_file, 'r') as f:
         processed = f.read().splitlines()
+        print(processed[0])
         # if processed already return True, else False
     return file_name in processed
 
@@ -176,7 +177,7 @@ def initialize_database(con, example_file_path:str|os.PathLike):
     # make a table with the correct schema if it doesn't exist
     # CRIME ID as primary key to ensure unique 
     # contraint for fast index    
-    con.execute("""CREATE TABLE street_data ("Crime ID" VARCHAR PRIMARY KEY,
+    con.execute("""CREATE TABLE IF NOT EXISTS street_data ("Crime ID" VARCHAR PRIMARY KEY,
                                              "Month" VARCHAR,
                                              "Reported by" VARCHAR,
                                              "Falls within" VARCHAR,
@@ -191,17 +192,14 @@ def initialize_database(con, example_file_path:str|os.PathLike):
 
 # %%
 
-# Set memory limits and temp, to avoid crashing
-con.execute("SET memory_limit='7GB'")
-con.execute("SET streaming_buffer_size = '4GB';")
-con.execute("SET temp_directory = temp_dir_path;")
-con.execute("SET preserve_insertion_order = false;")
-
-
 
 def update_duckdb(csv_paths:list[str|os.PathLike]):
     # put database at top level of data_dir
     con = duckdb.connect(data_dir/'crime_archive.db')
+    # Set memory limits and temp, to avoid crashing
+    con.execute("SET memory_limit='7GB'")
+    con.execute("SET streaming_buffer_size = '4GB';")
+    con.execute("SET preserve_insertion_order = false;")
     #enable a temp memory space to allow duckdb to spill to local
     con.execute(f"""SET temp_directory = '{temp_dir_path}';""")
     # create the datatable if it doesn't exist  
@@ -215,25 +213,20 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
             continue
             
         print(f"Ingesting {file_name}...")
+        # manually dedupe in chunks as not enough local RAM to form primary key :S
         try:
-            # use union by name incase the schema changes slightly between files (e.g., new columns added)
-            con.execute(f"""INSERT OR IGNORE INTO street_data
-                            SELECT * FROM (
-                                    SELECT DISTINCT
-                                     -- Manually deal with Crime ID (either use theirs or make a synthetic one if missing)
-                                    COALESCE(NULLIF("Crime ID", ''), 'NO_ID_' || uuid()) AS "Crime ID",
-                                    -- Now add eveything else
-                                    * EXCLUDE ("Crime ID"))
-                            FROM read_csv_auto('{csv_path}', union_by_name=True);
-                        ;""")
-        
-            # Only log success AFTER database update is complete
+            query = f"""INSERT INTO street_data
+                        SELECT * FROM read_csv_auto(?, union_by_name=True) AS new_data
+                        WHERE NOT EXISTS (SELECT 1 
+                                            FROM street_data AS existing 
+                                            WHERE existing."Crime ID" = new_data."Crime ID");"""
+            con.execute(query,[str(csv_path)])
             print(f"Processed {file_name}...")
-            # pause, dont hammer the server because that is just rude. 
-            time.sleep(2)
             mark_as_processed(file_name)
             # delete the csv
             os.remove(csv_path)
+            # pause, dont hammer the server because that is just rude. 
+            time.sleep(2)
         except Exception as e:
             print(f"Failed to process {file_name}: {e}")
             # pause, as above. 
