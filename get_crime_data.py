@@ -11,6 +11,9 @@
 #  ! Initial run is slow - duckdb method here is inefficient for 
 #  large data sets, but it is a simple approach to get started.   
 #  Needs to be improved for future runs/batched.
+#
+# 22/06/2026 - Data spanning  2010-12 to 2016-04 uploaded to 
+# an open access Zenodo repo https://doi.org/10.5281/zenodo.20798154
 #######################################################################
 
 
