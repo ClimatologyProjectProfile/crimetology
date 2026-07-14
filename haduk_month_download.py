@@ -2,10 +2,14 @@
 #import module
 from get_ceda_data import get_file  #code orignally from ceda github
 
-
 """
 You will be prompted to provide your CEDA username and password the first time the script is run and
 again if the token cached from a previous attempt has expired.
+You can check your username here: https://accounts.ceda.ac.uk/realms/ceda/account/#/personal-info
+It is case sensitive.
+
+Access tokens can be generated and deleted here: https://services-beta.ceda.ac.uk/account/token/
+This script will automatically generate fresh tokens when needed
 """
 
 #test with one file

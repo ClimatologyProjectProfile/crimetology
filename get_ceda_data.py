@@ -5,49 +5,42 @@ Original script from:  https://github.com/cedadev/opendap-python-example/blob/ma
 (downloaded 10.07.2026)
 remote_nc_with_token.py
 ===================
-
-Python script for reading a NetCDF file remotely from the CEDA archive. It fetches
-a download token to authenticate access to CEDA Archive data, as well as how to load
-and subset the Dataset from a stream of data (diskless), without having to download the whole file.
-
-```
-
+Python script for downloading a NetCDF file remotely from the CEDA archive.
 You will be prompted to provide your CEDA username and password the first time the script is run and
 again if the token cached from a previous attempt has expired.
-
 """
-
-import argparse
+#% Import modules
+from requests.models import Response
+from typing import Any
 import json
 import os
 import requests
-
+import shutil
 from base64 import b64encode
 from datetime import datetime, timezone
 from getpass import getpass
-from netCDF4 import Dataset
-from urllib.parse import urlparse
+import xarray as xr
 
+# %% Sort out token
 
 # URL for the CEDA Token API service
 TOKEN_URL = "https://services-beta.ceda.ac.uk/api/token/create/"
 # Location on the filesystem to store a cached download token
-TOKEN_CACHE = os.path.expanduser(os.path.join("~", ".cedatoken"))
+TOKEN_CACHE: str = os.path.expanduser(path=os.path.join("~", ".cedatoken"))
 
 
 def load_cached_token():
-    """Read the token back out from its cache file.
-
+    """
+    Read the token back out from its cache file.
     Returns a tuple containing the token and its expiry timestamp
     """
-
     # Read the token back out from its cache file
     try:
-        with open(TOKEN_CACHE, "r") as cache_file:
-            data = json.loads(cache_file.read())
+        with open(file=TOKEN_CACHE, mode="r") as cache_file:
+            data: Any = json.loads(cache_file.read())
 
-            token = data.get("access_token")
-            expires = datetime.strptime(data.get("expires"), "%Y-%m-%dT%H:%M:%S.%f%z")
+            token: Any = data.get("access_token")
+            expires: datetime = datetime.strptime(data.get("expires"), "%Y-%m-%dT%H:%M:%S.%f%z")
             return token, expires
 
     except FileNotFoundError:
@@ -65,7 +58,7 @@ def get_token():
     token, expires = load_cached_token()
 
     # If no token has been cached or the token has expired, we get a new one
-    now = datetime.now(timezone.utc)
+    now: datetime = datetime.now(tz=timezone.utc)
     if not token or expires < now:
 
         if not token:
@@ -75,24 +68,24 @@ def get_token():
         print("Generating a fresh token...")
 
         print("Please provide your CEDA username: ", end="")
-        username = input()
-        password = getpass(prompt="CEDA user password: ")
+        username: str = input()
+        password: str = getpass(prompt="CEDA user password: ")
 
-        credentials = b64encode(f"{username}:{password}".encode("utf-8")).decode(
-            "ascii"
+        credentials: str = b64encode(s=f"{username}:{password}".encode("utf-8")).decode(
+            encoding="ascii"
         )
-        headers = {
+        headers: dict[str, str] = {
             "Authorization": f"Basic {credentials}",
         }
-        response = requests.request("POST", TOKEN_URL, headers=headers)
+        response: Response = requests.request("POST", TOKEN_URL, headers=headers)
         if response.status_code == 200:
 
             # The token endpoint returns JSON
-            response_data = json.loads(response.text)
-            token = response_data["access_token"]
+            response_data: Any = json.loads(response.text)
+            token: Any = response_data["access_token"]
 
             # Store the JSON data in the cache file for future use
-            with open(TOKEN_CACHE, "w") as cache_file:
+            with open(file=TOKEN_CACHE, mode="w") as cache_file:
                 cache_file.write(response.text)
 
         else:
@@ -104,90 +97,46 @@ def get_token():
     return token, expires
 
 
-def open_dataset(url, download_token=None):
-    """Open a NetCDF dataset from a remote file URL. Files requiring authentication
-     will require an active download token associated with an authorised CEDa user.
 
-    Returns a Python NetCDF4 Dataset object
-    """
+# %% Download routine
 
-    headers = None
-    # Add the download token to the request header if one is available
-    if download_token:
-        headers = {"Authorization": f"Bearer {download_token}"}
-
-    response = requests.request("GET", url, headers=headers, stream=True)
-    if response.status_code != 200:
-        print(
-            f"Failed to fetch data. The response from the server was {response.status_code}"
-        )
-        return
-
-    filename = os.path.basename(urlparse(url).path)
-    print(f"Opening Dataset from file {filename} ...")
-    # To avoid downloading the whole file, we create an "in-memory" Dataset from the response
-    # See: https://unidata.github.io/netcdf4-python/#in-memory-diskless-datasets
-    return Dataset(filename, memory=response.content)
+def download_dataset(url, download_token=None):
+    # headers should carry the download token so CEDA
+    # knows who we are
+    headers: dict = {"Authorization": f"Bearer {download_token}"} if download_token else {}
+    # where to save file
+    local_path: str = os.path.join(os.getcwd(), 'test.nc')
+    
+    with requests.Session() as session:
+        with session.get(url, headers=headers, stream=True) as response:
+            response.raise_for_status()
+            # Use shutil to copy the stream directly to the file
+            with open(file=local_path, mode='wb') as f:
+                shutil.copyfileobj(fsrc=response.raw, fdst=f)
+    
+    print(f"Download complete: {os.path.getsize(local_path)} bytes")
+    
+    # Open the dataset
+    return xr.open_dataset(filename_or_obj=local_path, engine='netcdf4')
 
 
+# %% Entry point function
 def get_file(url:str,var_id:str):
-    "Adjusting to run from another script"
-
-#    parser = argparse.ArgumentParser(
-#        prog="RemoteNetCDFWithToken",
-#        description=("Example script showing how to read a restricted-access remote NetCDF Dataset"
-#            " from the CEDA Archive using authentication tokens."),
-#    )
-
-#    parser.add_argument("url")
-#    parser.add_argument("var_id")
-
-#    args = parser.parse_args()
-
-#    url = args.url
-#    var_id = args.var_id
-
+    "Download file located at provided url"
     token, expires = get_token()
     if token:
-        # Now that we have a valid token, we can attempt to open the Dataset from a URL.
-        # This will only work if the token is associated with a CEDA user that has been granted
-        # access to the data (i.e. if they can already download the file in a browser).
-        # 
         print(f"Fetching information about variable '{var_id}' using data URL: '{url}'")
         if token:
-            print((
-                f"Using download token '{token[:5]}...{token[-5:]}' for authentication."
-                f" Token expires at: {expires}."
-            ))
+            print((f"Using download token '{token[:2]}...{token[-2:]}' for authentication."
+                f" Token expires at: {expires}."))
         else:
             print("No DOWNLOAD_TOKEN found in environment.")
 
-        dataset = open_dataset(url, download_token=token)
-
-        # Now we can print some properties of the dataset.
-        # 
-        print("\n[INFO] Global attributes:")
-        #for attr in dataset.ncattrs():
-        #    print("\t{}: {}".format(attr, dataset.getncattr(attr)))
-
-        print("\n[INFO] Variables:\n{}".format(dataset.variables))
-        print("\n[INFO] Dimensions:\n{}".format(dataset.dimensions))
-
-        print("\n[INFO] Max and min variable: {}".format(var_id))
-        variable = dataset.variables[var_id][:]
-        units = dataset.variables[var_id].units
-        print(
-            "\tMin: {:.6f} {}; Max: {:.6f} {}".format(
-                variable.min(), units, variable.max(), units
-            )
-        )
-
+        # use download function to download the data, currently returns the opened 
+        # file while testing
+        dataset = download_dataset(url, download_token=token)
+        # Print some properties of the dataset, to check everything looks sensible
+        print("\n[INFO]:")
+        print(dataset)
     else:
-        # The script wont run without a token since attempting to open a restricted file
-        # without authentication will give an unhelpful error. Though, open access datasets
-        # can be accessed without a token.
-        # 
-        # i.e.
-        # dataset = open_dataset(url, download_token=None)
-        #
         print("Aborting since we don't have a token.")
