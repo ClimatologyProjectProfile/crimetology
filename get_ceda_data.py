@@ -20,6 +20,7 @@ from base64 import b64encode
 from datetime import datetime, timezone
 from getpass import getpass
 import xarray as xr
+from pathlib import Path
 
 # %% Sort out token
 
@@ -101,23 +102,27 @@ def get_token():
 # %% Download routine
 
 def download_dataset(url, download_token=None):
+    # isolate just the file name for saving
+    filename:str= url.name
     # headers should carry the download token so CEDA
     # knows who we are
     headers: dict = {"Authorization": f"Bearer {download_token}"} if download_token else {}
-    # where to save file
-    local_path: str = os.path.join(os.getcwd(), 'test.nc')
-    
-    with requests.Session() as session:
-        with session.get(url, headers=headers, stream=True) as response:
-            response.raise_for_status()
-            # Use shutil to copy the stream directly to the file
-            with open(file=local_path, mode='wb') as f:
-                shutil.copyfileobj(fsrc=response.raw, fdst=f)
-    
-    print(f"Download complete: {os.path.getsize(local_path)} bytes")
-    
-    # Open the dataset
-    return xr.open_dataset(filename_or_obj=local_path, engine='netcdf4')
+    try:
+        with requests.Session() as session:
+            with session.get(url, headers=headers, stream=True) as response:
+                response.raise_for_status()
+                # Use shutil to copy the stream directly to the file
+                with open(file=filename, mode='wb') as f:
+                    shutil.copyfileobj(fsrc=response.raw, fdst=f)
+        return True
+    ## catch some exception types with specific messages, generic at end. 
+    except requests.exceptions.RequestException as e:
+        print(f"Network/Request error while downloading {filename}: {e}")
+    except IOError as e:
+        print(f"File system error while saving {filename}: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    return False 
 
 
 # %% Entry point function
@@ -132,11 +137,9 @@ def get_file(url:str,var_id:str):
         else:
             print("No DOWNLOAD_TOKEN found in environment.")
 
-        # use download function to download the data, currently returns the opened 
-        # file while testing
-        dataset = download_dataset(url, download_token=token)
-        # Print some properties of the dataset, to check everything looks sensible
-        print("\n[INFO]:")
-        print(dataset)
+        # download and save
+        # this will return a True/False flag depending on 
+        # if error was raised (False = Error raised)
+        return download_dataset(url, download_token=token)
     else:
         print("Aborting since we don't have a token.")
