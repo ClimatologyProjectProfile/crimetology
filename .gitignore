@@ -10,10 +10,11 @@ Thumbs.db
 # --- Logs & Temp ---
 *.log
 *.tmp
-crimetology.code-workspace
+*.pyc
 
 
 # --- Data Files ---
 data/*  
 *.csv
-crimetology.code-workspace
+*.nc
+*.cdf
