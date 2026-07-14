@@ -17,9 +17,9 @@ import duckdb
 
 ############################################################
 # %% Setup directories and paths
-cwd = os.getcwd()
-data_dir = Path(cwd) / 'data' / 'police_archives'
-crime_db = data_dir/'crime_archive.db'
+cwd: str = os.getcwd()
+data_dir: Path = Path(cwd) / 'data' / 'police_archives'
+crime_db: Path = data_dir/'crime_archive.db'
 
 
 # %%
