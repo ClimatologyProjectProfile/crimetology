@@ -26,7 +26,6 @@ import os
 
 #import custom code
 from get_ceda_data import get_file  #code orignally from ceda github
- # reuse code from crime data import (DRY)
 
 
 
@@ -94,7 +93,7 @@ def _find_files(var_in:str,start_year,end_year):
 
 ## create a download log (this is from get_crime_data.py)
 ## but i didnt make the code nicely enough and I have no 
-## clear entry point function to set as __init__ block. 
+## clear entry point function to set as __name__=__main__ block. 
 # TODO ^^
 def _is_already_processed(file_name) -> bool:
     """
