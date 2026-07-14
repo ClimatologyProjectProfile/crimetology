@@ -101,9 +101,9 @@ def get_token():
 
 # %% Download routine
 
-def download_dataset(url, download_token=None):
+def download_dataset(url:str,save_loc:Path,download_token=None):
     # isolate just the file name for saving
-    filename:str= url.name
+    filename: str= Path(url).name
     # headers should carry the download token so CEDA
     # knows who we are
     headers: dict = {"Authorization": f"Bearer {download_token}"} if download_token else {}
@@ -112,7 +112,7 @@ def download_dataset(url, download_token=None):
             with session.get(url, headers=headers, stream=True) as response:
                 response.raise_for_status()
                 # Use shutil to copy the stream directly to the file
-                with open(file=filename, mode='wb') as f:
+                with open(file=save_loc/filename, mode='wb') as f:
                     shutil.copyfileobj(fsrc=response.raw, fdst=f)
         return True
     ## catch some exception types with specific messages, generic at end. 
@@ -126,7 +126,7 @@ def download_dataset(url, download_token=None):
 
 
 # %% Entry point function
-def get_file(url:str,var_id:str):
+def get_file(url:str,var_id:str,save_loc):
     "Download file located at provided url"
     token, expires = get_token()
     if token:
@@ -140,6 +140,6 @@ def get_file(url:str,var_id:str):
         # download and save
         # this will return a True/False flag depending on 
         # if error was raised (False = Error raised)
-        return download_dataset(url, download_token=token)
+        return download_dataset(url, save_loc, download_token=token)
     else:
         print("Aborting since we don't have a token.")
