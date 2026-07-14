@@ -184,15 +184,6 @@ if get_data:
 # Ingest archived data into local duckdb database
 
 ## Helper Functions
-def is_already_processed(file_name):
-    """Check if the file has been processed in a previous run."""
-    if not os.path.exists(log_file):
-        return False
-    with open(log_file, 'r') as f:
-        processed = f.read().splitlines()
-        # if processed already return True, else False
-    return file_name in processed
-
 def mark_as_processed(file_name):
     """Record a file as processed."""
     with open(log_file, 'a') as f:
