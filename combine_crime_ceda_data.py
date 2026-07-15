@@ -26,11 +26,11 @@ from scipy.spatial import cKDTree
 #https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.cKDTree.html
 
 from _duckdb import DuckDBPyConnection
-import duckdb
+import duckdbc
 
 #####################################################################
 #
-# Step One: Open a subset of crime data
+# Step One: Create a subset of crime data for the project
 # (this forms the base of out new data table)
 #
 #####################################################################
@@ -76,9 +76,6 @@ force_list: DataFrame = con.execute(query="""SELECT DISTINCT "Falls Within" FROM
 # Suffolk: Suffolk Constabulary
 
 
-
-
-
 ## Interesting question: Initially looking at Norfolk and Suffolk
 # for initial scoping of project. This is rurual, rural/urban (not large city urban, metropolitian)
 # intersting to compare the results to UK wide vs this geographic subset 
@@ -121,9 +118,17 @@ con.execute(query="SHOW TABLES").fetchall()
 con.execute(query="SELECT * FROM crimetology_NS LIMIT 15;").df()
 con.execute(query="SELECT COUNT(*) FROM crimetology_NS;").df()
 
-###################################################################################
-## map to weather
-###################################################################################
+
+
+#####################################################################
+#
+# Step Two: Map distinct police.ac.uk anonymysed lat/lons to the nearest
+# Had UK 1km projected lat/lon and save this as a lookup table
+#
+#####################################################################
+
+############################
+## police.ac.uk geospatial points
 # %%
 # Crime data spatial data - just find the lat, lons that are unqiue as one dataframe
 crime_lat_lons_query:str = """ SELECT DISTINCT
@@ -140,13 +145,18 @@ crime_lat_lons_mapping.head()
 #introspect
 crime_lat_lons_mapping.info()
 
+#data quality check (if nans / inf the tree wont work)
+np.isnan(crime_lat_lons_mapping).sum()
+# 0 
+np.isinf(crime_lat_lons_mapping).sum()
+# 0
 
 
 
 
+############################
+## HadUK geospatial points
 # %%
-# Weather data spatial data - just find the lat, lons that are unqiue as one dataframe
-
 ## look at netcdf format of a random file
 cdf_format_check_file: Dataset = xr.open_dataset(filename_or_obj=weather_data_dir / Path('groundfrost/groundfrost_hadukgrid_uk_1km_mon_201601-201612.nc'))
 #quick plot
@@ -168,12 +178,11 @@ HadUK_lons
 HadUK_latlon_grid_points = np.column_stack([HadUK_lats.ravel(),HadUK_lons.ravel()])
 ## length 1305000
 
-
+############################
+## Mapping Step
 # to map the crime archive lat lon data to HadUK lat lon data we are going to 
 # do a closest value lookup. Efficient method is scipy cKDTree
-
 tree = cKDTree(HadUK_latlon_grid_points)
-
 
 # test nearest neigbour lookup on one point
 crime_test_coord = crime_lat_lons_mapping.iloc[25]
@@ -183,18 +192,7 @@ print(crime_test_coord)
 print(HadUK_latlon_grid_points[i,:])
 
 
-
-# %%
-
-crime_points_tuple: ndarray = np.column_stack(tup=[crime_lat_lons_mapping['Latitude'].values,crime_lat_lons_mapping['Longitude']])
-#data quality check
-np.isnan(crime_points_tuple).sum()
-# 0 
-np.isinf(crime_points_tuple).sum()
-# 0
-
-# %% Now map the crime points to the nearest neightbour 
-# from HadUK 1km grid
+# %% Now map the crime points to the nearest neighbour 
 _, idx = tree.query(crime_lat_lons_mapping,k=1)
 mapped_data = HadUK_latlon_grid_points[idx]
 
@@ -203,7 +201,14 @@ crime_lat_lons_mapping['Latitude_HadUK'] = mapped_data[:,0]
 crime_lat_lons_mapping['Longitude_HadUK'] = mapped_data[:,1]
 
 
-# now add this to the duckdb as a lookup table
+#check 
+(crime_lat_lons_mapping['Latitude']-crime_lat_lons_mapping['Latitude_HadUK']).max()
+(crime_lat_lons_mapping['Longitude']-crime_lat_lons_mapping['Longitude_HadUK']).max()
+
+
+############################
+## Save Lookup
+#
 if make_table:
         con.register(view_name='coords_mapping_df', python_object=crime_lat_lons_mapping)
         con.execute(query="""CREATE OR REPLACE TABLE crimetology_coords_lookup AS
@@ -212,3 +217,4 @@ if make_table:
 
 # check the table is stored in the duckdb
 con.execute(query="SELECT * FROM crimetology_coords_lookup LIMIT 30;").df()
+
