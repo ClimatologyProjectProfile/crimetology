@@ -13,13 +13,20 @@ Mapping from lat lon to the 1km grid
 
 ###########################################################
 # %% Import modules
-from pandas.core.frame import DataFrame
-from _duckdb import DuckDBPyConnection
 import os
-import duckdb
 from pathlib import Path
-import duckdb
 
+import xarray as xr
+from xarray.core.dataset import Dataset
+from pandas.core.frame import DataFrame
+import numpy as np
+from numpy import ndarray
+
+from scipy.spatial import cKDTree
+#https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.cKDTree.html
+
+from _duckdb import DuckDBPyConnection
+import duckdb
 
 #####################################################################
 #
@@ -33,6 +40,7 @@ import duckdb
 cwd: str = os.getcwd()
 crime_data_dir: Path = Path(cwd) / 'data' / 'police_archives'
 crime_db: Path = crime_data_dir/'crime_archive.db'
+weather_data_dir: Path = Path(cwd) / 'data' / 'ceda' / 'raw'
 
 # %% User Inputs
 make_table:bool = False
@@ -107,4 +115,55 @@ if make_table:
 con.execute(query="SHOW TABLES").fetchall()
 con.execute(query="SELECT * FROM crimetology_NS LIMIT 15;").df()
 
+###################################################################################
 ## map to weather
+###################################################################################
+# %%
+# Crime data spatial data - just find the lat, lons that are unqiue as one dataframe
+crime_lat_lons_query:str = """ SELECT DISTINCT
+                                      Latitude,
+                                      Longitude
+                                  FROM crimetology_NS;""" 
+crime_lat_lons: DataFrame = con.execute(query=crime_lat_lons_query).df()
+
+crime_lat_lons.shape
+# 56205 distinct lat, lon entries 
+
+# have a look at an entry
+crime_lat_lons.head()
+#introspect
+crime_lat_lons.info()
+
+
+
+
+
+# %%
+# Weather data spatial data - just find the lat, lons that are unqiue as one dataframe
+
+## look at netcdf format of a random file
+cdf_format_check_file: Dataset = xr.open_dataset(filename_or_obj=weather_data_dir / Path('groundfrost/groundfrost_hadukgrid_uk_1km_mon_201601-201612.nc'))
+#quick plot
+cdf_format_check_file['groundfrost'].mean(dim='time').plot()
+#everything looks reasonable post download
+
+# get the HadUK lat lon grid (transerver mercator proj)
+# doing for whole UK to enable future project iterations
+HadUK_lats: ndarray = cdf_format_check_file['latitude'].values
+HadUK_lons: ndarray = cdf_format_check_file['longitude'].values
+
+# have a look
+HadUK_lats
+HadUK_lons
+#both have shape (1450,900)
+#expected ravelled length is 1305000
+
+#create all HadUK lat/lon pairs (=1540x900 pairs)
+HadUK_latlon_grid_points = np.column_stack([HadUK_lats.ravel(),HadUK_lons.ravel()])
+## length 1305000
+
+
+# to map the crime archive lat lon data to HadUK lat lon data we are going to 
+# do a closest value lookup. Efficient method is scipy cKDTree
+
+tree = cKDTree(HadUK_latlon_grid_points)
