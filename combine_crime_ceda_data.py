@@ -102,18 +102,24 @@ if make_table:
                         "Crime type"
                 FROM street_data 
                 WHERE "Falls within" IN ('Norfolk Constabulary', 'Suffolk Constabulary')
-                AND Month BETWEEN '2016-01' AND '2025-12';
+                        AND Month BETWEEN '2016-01' AND '2025-12'
+                        AND Month IS NOT NULL
+                        AND Latitude IS NOT NULL
+                        AND Longitude IS NOT NULL;
                 """
         con.execute(query=subset_query)
 
 
 #table size = 1314474 rows
+# once null values filtered = 1280212
+# 34262 rows removed....
 # original street data archive = 92362169
 
 
 #now open and have a look
 con.execute(query="SHOW TABLES").fetchall()
 con.execute(query="SELECT * FROM crimetology_NS LIMIT 15;").df()
+con.execute(query="SELECT COUNT(*) FROM crimetology_NS;").df()
 
 ###################################################################################
 ## map to weather
@@ -124,15 +130,15 @@ crime_lat_lons_query:str = """ SELECT DISTINCT
                                       Latitude,
                                       Longitude
                                   FROM crimetology_NS;""" 
-crime_lat_lons: DataFrame = con.execute(query=crime_lat_lons_query).df()
+crime_lat_lons_mapping: DataFrame = con.execute(query=crime_lat_lons_query).df()
 
-crime_lat_lons.shape
+crime_lat_lons_mapping.shape
 # 56205 distinct lat, lon entries 
 
 # have a look at an entry
-crime_lat_lons.head()
+crime_lat_lons_mapping.head()
 #introspect
-crime_lat_lons.info()
+crime_lat_lons_mapping.info()
 
 
 
@@ -144,7 +150,7 @@ crime_lat_lons.info()
 ## look at netcdf format of a random file
 cdf_format_check_file: Dataset = xr.open_dataset(filename_or_obj=weather_data_dir / Path('groundfrost/groundfrost_hadukgrid_uk_1km_mon_201601-201612.nc'))
 #quick plot
-cdf_format_check_file['groundfrost'].mean(dim='time').plot()
+#cdf_format_check_file['groundfrost'].mean(dim='time').plot()
 #everything looks reasonable post download
 
 # get the HadUK lat lon grid (transerver mercator proj)
@@ -167,3 +173,42 @@ HadUK_latlon_grid_points = np.column_stack([HadUK_lats.ravel(),HadUK_lons.ravel(
 # do a closest value lookup. Efficient method is scipy cKDTree
 
 tree = cKDTree(HadUK_latlon_grid_points)
+
+
+# test nearest neigbour lookup on one point
+crime_test_coord = crime_lat_lons_mapping.iloc[25]
+_,i = tree.query(crime_test_coord)
+#looks sensible
+print(crime_test_coord)
+print(HadUK_latlon_grid_points[i,:])
+
+
+
+# %%
+
+crime_points_tuple: ndarray = np.column_stack(tup=[crime_lat_lons_mapping['Latitude'].values,crime_lat_lons_mapping['Longitude']])
+#data quality check
+np.isnan(crime_points_tuple).sum()
+# 0 
+np.isinf(crime_points_tuple).sum()
+# 0
+
+# %% Now map the crime points to the nearest neightbour 
+# from HadUK 1km grid
+_, idx = tree.query(crime_lat_lons_mapping,k=1)
+mapped_data = HadUK_latlon_grid_points[idx]
+
+# append the mapped data to the DataFrame
+crime_lat_lons_mapping['Latitude_HadUK'] = mapped_data[:,0]
+crime_lat_lons_mapping['Longitude_HadUK'] = mapped_data[:,1]
+
+
+# now add this to the duckdb as a lookup table
+if make_table:
+        con.register(view_name='coords_mapping_df', python_object=crime_lat_lons_mapping)
+        con.execute(query="""CREATE OR REPLACE TABLE crimetology_coords_lookup AS
+                                SELECT * 
+                                FROM coords_mapping_df;""")
+
+# check the table is stored in the duckdb
+con.execute(query="SELECT * FROM crimetology_coords_lookup LIMIT 30;").df()
