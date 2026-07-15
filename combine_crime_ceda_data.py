@@ -26,14 +26,7 @@ from scipy.spatial import cKDTree
 #https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.cKDTree.html
 
 from _duckdb import DuckDBPyConnection
-import duckdbc
-
-#####################################################################
-#
-# Step One: Create a subset of crime data for the project
-# (this forms the base of out new data table)
-#
-#####################################################################
+import duckdb
 
 ############################################################
 # %% Setup directories and paths
@@ -42,11 +35,22 @@ crime_data_dir: Path = Path(cwd) / 'data' / 'police_archives'
 crime_db: Path = crime_data_dir/'crime_archive.db'
 weather_data_dir: Path = Path(cwd) / 'data' / 'ceda' / 'raw'
 
+
+############################################################
 # %% User Inputs
 make_table:bool = False
 
 
 
+
+
+
+#####################################################################
+#
+# Step One: Create a subset of crime data for the project
+# (this forms the base of out new data table)
+#
+#####################################################################
 # %%
 # set up duck db connection
 con: DuckDBPyConnection = duckdb.connect(database=crime_db)
@@ -54,10 +58,15 @@ con: DuckDBPyConnection = duckdb.connect(database=crime_db)
 # introspect
 con.execute(query="SHOW TABLES").fetchall()
 con.execute(query="SELECT * FROM street_data LIMIT 5;").df()
-con.execute(query="SELECT COUNT(*) FROM street_data;").df()
+con.execute(query="SELECT COUNT(*) FROM street_data;").df()""
 
 # Look at data type for later filtering
-con.execute(query="SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'street_data' AND column_name = 'Month';").fetchall()
+con.execute(query="""SELECT column_name, 
+                            data_type 
+                     FROM information_schema.columns 
+                     WHERE table_name = 'street_data' 
+                        AND column_name = 'Month';"""
+             ).fetchall()
 # Month column is VARCHAR
 
 # have a look at all months
@@ -178,6 +187,11 @@ HadUK_lons
 HadUK_latlon_grid_points = np.column_stack([HadUK_lats.ravel(),HadUK_lons.ravel()])
 ## length 1305000
 
+# for mapping check, get the largest 1D grid spacing in HadUK
+max_hadUK_lat = np.abs([HadUK_lats[i+1]-HadUK_lats[i] for i in range(len(HadUK_lats)-1)]).max()
+max_hadUK_lon = np.abs([HadUK_lons[i+1]-HadUK_lons[i] for i in range(len(HadUK_lons)-1)]).max()
+
+
 ############################
 ## Mapping Step
 # to map the crime archive lat lon data to HadUK lat lon data we are going to 
@@ -201,10 +215,19 @@ crime_lat_lons_mapping['Latitude_HadUK'] = mapped_data[:,0]
 crime_lat_lons_mapping['Longitude_HadUK'] = mapped_data[:,1]
 
 
-#check 
-(crime_lat_lons_mapping['Latitude']-crime_lat_lons_mapping['Latitude_HadUK']).max()
-(crime_lat_lons_mapping['Longitude']-crime_lat_lons_mapping['Longitude_HadUK']).max()
+#check distance mapping
+(np.abs((crime_lat_lons_mapping['Latitude']-crime_lat_lons_mapping['Latitude_HadUK']))>max_hadUK_lat).sum()
+# all latitudes within one gridcell
 
+((np.abs(crime_lat_lons_mapping['Longitude']-crime_lat_lons_mapping['Longitude_HadUK'])) > 3*max_hadUK_lon).sum()
+#32603 over one grid cell away (~1km)
+#9009 over two grid cells away (~2km)
+# All within three gridcells (~3km)
+
+## since the crime data lat/lon points are anonymysed with data points
+# over 20km away being discarded, this is adding only around a 10%
+# margin of error versus the anonymysation
+# Currently acceptable
 
 ############################
 ## Save Lookup
@@ -218,3 +241,5 @@ if make_table:
 # check the table is stored in the duckdb
 con.execute(query="SELECT * FROM crimetology_coords_lookup LIMIT 30;").df()
 
+
+# %%
