@@ -13,6 +13,7 @@ Mapping from lat lon to the 1km grid
 
 ###########################################################
 # %% Import modules
+from scipy.constants import c
 import os
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from xarray.core.dataset import Dataset
 from pandas.core.frame import DataFrame
 import numpy as np
 from numpy import ndarray
+import pandas as pd
 
 from scipy.spatial import cKDTree  # ty:ignore[unresolved-import] because ty is wrong.
 #https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.cKDTree.html
@@ -272,16 +274,34 @@ weather_vars: list = [key for key in weather_files_dict.keys()]
 weather_vars[5]
 weather_files_dict[weather_vars[5]]
 
-# month by month
-months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
+## helper functions for pulling the weather data for 
+# the crimetology subset table
 
 def get_weather_files(month:str) -> dict:
         year: str = month.split(sep='-')[0]
         filtered_dict: dict= {key: [p for p in paths if year in str(object=p)] for key, paths in weather_files_dict.items()}
         return(filtered_dict)
 
-def create_weather_df(month_in:str) -> xr.Dataset:
+def get_coords(month:str) -> DataFrame:
+        one_month_coords_lookup_query:str = f"""SELECT DISTINCT
+                                                weather_grid_y,   --latitude
+                                                weather_grid_x,   --longitude
+                                        FROM crimetology_NS AS crime
+                                        LEFT JOIN crimetology_coords_lookup AS coords
+                                                ON crime.Longitude = coords.Longitude 
+                                                AND crime.Latitude = coords.Latitude
+                                        WHERE Month IN ('{month}');"""
+        all_coords: DataFrame = con.execute(query=one_month_coords_lookup_query).df()
+        return all_coords
+
+def create_weather_df(month_in:str) -> DataFrame:
+        # location on net cdf files
         file_locs: dict = get_weather_files(month=month_in)
+        # 
+        grid_indicies: DataFrame = get_coords(month_in)
+        y_idx = xr.DataArray(data=grid_indicies['weather_grid_y'].values,dims='points')
+        x_idx = xr.DataArray(data=grid_indicies['weather_grid_x'].values,dims='points')
+
         # collect up data over all weather variables for that month
         data_list: list = []
         for var, data_path in file_locs.items():
@@ -291,80 +311,54 @@ def create_weather_df(month_in:str) -> xr.Dataset:
                 if len(data_path)!=1: 
                         raise ValueError(f"Expected 1 file for {var}, but found {len(data_path)}")
                 with xr.open_dataset(filename_or_obj=data_path[0]) as ds:
-                        # slice over full month as i dont know what dummy index is used
+                    # slice over month as i dont know what dummy index is used
                     sliced_ds: Dataset = ds.sel(time=slice(month_in+'-01',month_in+'-28'))
-                    data_list.append(sliced_ds)
+                    #data_list.append(sliced_ds)
+                    # pull only data into memory that we actually need
+                    filtered_data: Dataset = sliced_ds.isel(projection_y_coordinate=y_idx,
+                                                            projection_x_coordinate=x_idx)
+                    data_list.append(filtered_data)
         #NOTE: some of these weather vars do not have the same time bounds
         # so override the comparibility test as this does not matter
         # for our purposes here
-        return(xr.merge(objects=data_list,compat='override'))
+        all_data: xr.DataArray = xr.merge(objects=data_list,compat='override')
+        # dont need the metadata - drop it if its there
+        all_data: xr.DataArray = all_data.drop_vars(names=["time_bnds",
+                                                        "transverse_mercator",
+                                                        "projection_y_coordinate_bnds",
+                                                        "projection_x_coordinate_bnds"], 
+                                                        errors="ignore")
+        # this part is memory intensive
+        all_data: DataFrame = all_data.to_dataframe().reset_index()
+        # finally concat on to coords so we can merge back to duck
+        result: DataFrame = pd.concat(objs=[grid_indicies, all_data], axis=1)
+        return(result)
 
 
 
-# randomly check one variable
-test: Dataset = create_weather_df(month_in=months[25])
-#test['tasmax'].plot()
-# test['tasmin'].plot()
-# test['snowLying'].plot()
-# test['rainfall'].plot()
-# test['hurs'].plot()
-# test['sfcWind'].plot()
-# test['groundfrost'].plot()
-# test['sun'].plot()
+#############################
+# Find all months
+#
 
+# month by month
+months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
 
-#get one month of the subset crime data
-# and join HadUK coords via lookup
-one_month_crime_query:str = f"""SELECT
-                                    "Crime ID",
-                                    Month,
-                                    crime.Latitude,
-                                    Latitude_HadUK,
-                                    crime.Longitude,
-                                    Longitude_HadUK,
-                               FROM crimetology_NS AS crime
-                               LEFT JOIN crimetology_coords_lookup AS coords
-                                   ON crime.Longitude = coords.Longitude 
-                                   AND crime.Latitude = coords.Latitude
-                               WHERE Month IN ('{months[23]}');"""
+# figuring out how to append weather data for a test month
+weather_staging:DataFrame = create_weather_df(month_in=months[23])
+con.register(view_name='tmp_weather_table', python_object=weather_staging)
 
-con.execute(query=one_month_crime_query).df()
-
-
-
-one_month_coords_lookup_query:str = f"""SELECT DISTINCT
-                                                Latitude_HadUK,
-                                                Longitude_HadUK,
-                                        FROM crimetology_NS AS crime
-                                        LEFT JOIN crimetology_coords_lookup AS coords
-                                                ON crime.Longitude = coords.Longitude 
-                                                AND crime.Latitude = coords.Latitude
-                                        WHERE Month IN ('{months[23]}');"""
-all_coords: DataFrame = con.execute(query=one_month_coords_lookup_query).df()
-#flatten for the vertorised lookup
-lats = xr.DataArray(data=all_coords['Latitude_HadUK'].values, dims='points')
-lons = xr.DataArray(data=all_coords['Longitude_HadUK'].values, dims='points')
-
-
-
-
-
-
-test: Dataset = create_weather_df(month_in=months[23])
-
-for var in test.data_vars:
-        #skip meta vars
-        if var in ['transverse_mercator', \
-                   'time_bnds', \
-                   'projection_y_coordinate_bnds', \
-                   'projection_x_coordinate_bnds']:
-                   continue
-        print(var)
-
-test['tasmax'].sel(latitude=lats,longitude=lons,method='nearest')
-
-
-
-
-
-# %%
+# #projection to points sanity check:
+# join_data_query:str = f"""SELECT coords.Latitude_HadUK,
+#                                  staged.latitude,
+#                                  coords.Longitude_HadUK,
+#                                  staged.longitude
+#                                 FROM crimetology_NS AS crime
+#                                 LEFT JOIN crimetology_coords_lookup AS coords
+#                                         ON crime.Longitude = coords.Longitude 
+#                                         AND crime.Latitude = coords.Latitude
+#                                 LEFT JOIN weather_staging AS staged
+#                                         ON coords.weather_grid_y = staged.weather_grid_y
+#                                         AND coords.weather_grid_x = staged.weather_grid_x
+#                                 WHERE Month IN ('{months[23]}');"""
+# con.execute(query=join_data_query).df()
+# #all looks good!
