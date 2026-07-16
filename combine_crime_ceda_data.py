@@ -245,7 +245,7 @@ con.execute(query="SELECT * FROM crimetology_coords_lookup LIMIT 30;").df()
 
 #####################################################################
 #
-# Step Three: combine crime and weather data
+# Step Three: create a weather data lookup table
 #
 #####################################################################
 
@@ -268,12 +268,45 @@ weather_files_dict[weather_vars[5]]
 # month by month
 months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
 
-def get_weather_files(month) -> dict:
-        print(month)
-        year: str = month.split('-')[0]
-        print(year)
+def get_weather_files(month:str) -> dict:
+        year: str = month.split(sep='-')[0]
         filtered_dict: dict= {key: [p for p in paths if year in str(object=p)] for key, paths in weather_files_dict.items()}
         return(filtered_dict)
 
-#test
-get_weather_files(month=months[22])
+def create_weather_df(month_in:str) -> xr.Dataset:
+        file_locs: dict = get_weather_files(month=month_in)
+        # collect up data over all weather variables for that month
+        data_list: list = []
+        for var, data_path in file_locs.items():
+                # there should only be one file per date stamp
+                # so check this and raise an error if something has gone
+                # wrong
+                if len(data_path)!=1: 
+                        raise ValueError(f"Expected 1 file for {var}, but found {len(data_path)}")
+                with xr.open_dataset(filename_or_obj=data_path[0]) as ds:
+                        # slice over full month as i dont know what dummy index is used
+                    sliced_ds: Dataset = ds.sel(time=slice(month_in+'-01',month_in+'-28'))
+                    data_list.append(sliced_ds)
+        #NOTE: some of these weather vars do not have the same time bounds
+        # so override the comparibility test as this does not matter
+        # for our purposes here
+        return(xr.merge(objects=data_list,compat='override'))
+
+
+
+# randomly check one variable
+test: Dataset = create_weather_df(month_in=months[25])
+#test['tasmax'].plot()
+# test['tasmin'].plot()
+# test['snowLying'].plot()
+# test['rainfall'].plot()
+# test['hurs'].plot()
+# test['sfcWind'].plot()
+# test['groundfrost'].plot()
+# test['sun'].plot()
+
+
+test
+
+
+
