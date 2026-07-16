@@ -343,9 +343,13 @@ def create_weather_df(month_in:str) -> DataFrame:
 # month by month
 months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
 
+
 # figuring out how to append weather data for a test month
 weather_staging:DataFrame = create_weather_df(month_in=months[23])
 con.register(view_name='tmp_weather_table', python_object=weather_staging)
+
+
+## add this data to the table
 
 # #projection to points sanity check:
 # join_data_query:str = f"""SELECT coords.Latitude_HadUK,
@@ -362,3 +366,35 @@ con.register(view_name='tmp_weather_table', python_object=weather_staging)
 #                                 WHERE Month IN ('{months[23]}');"""
 # con.execute(query=join_data_query).df()
 # #all looks good!
+
+# have a look
+select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
+join_data_query:str = f"""SELECT crime.*,
+                                {select_cols}
+                                FROM crimetology_NS AS crime
+                                LEFT JOIN crimetology_coords_lookup AS coords
+                                        ON crime.Longitude = coords.Longitude 
+                                        AND crime.Latitude = coords.Latitude
+                                LEFT JOIN weather_staging AS staged
+                                        ON coords.weather_grid_y = staged.weather_grid_y
+                                        AND coords.weather_grid_x = staged.weather_grid_x
+                                WHERE Month IN ('{months[23]}');"""
+con.execute(query=join_data_query).df()
+
+
+
+
+# update query - need this as a function.... staged with be 
+# made for each month
+select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
+#update_query = f"""UPDATE crimetology_NS AS crime
+#                SET {select_cols}
+#                        FROM crimetology_coords_lookup AS coords,
+#                                weather_staging AS staged
+#                        WHERE crime.Longitude = coords.Longitude 
+#                                AND crime.Latitude = coords.Latitude
+#                                AND coords.weather_grid_y = staged.weather_grid_y
+#                                AND coords.weather_grid_x = staged.weather_grid_x
+#                                AND crime.Month = '{month}';
+#"""
+#con.execute(update_query)
