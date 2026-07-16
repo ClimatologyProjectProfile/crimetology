@@ -185,6 +185,8 @@ HadUK_lons
 
 #create all HadUK lat/lon pairs (=1540x900 pairs)
 HadUK_latlon_grid_points = np.column_stack([HadUK_lats.ravel(),HadUK_lons.ravel()])
+#store the original grid shape for fast x/y indices look up later
+grid_shape = HadUK_lats.shape
 ## length 1305000
 
 # for mapping check, get the largest 1D grid spacing in HadUK
@@ -209,10 +211,15 @@ print(HadUK_latlon_grid_points[i,:])
 # %% Now map the crime points to the nearest neighbour 
 _, idx = tree.query(crime_lat_lons_mapping,k=1)
 mapped_data = HadUK_latlon_grid_points[idx]
+# the weather data is stored as lat/lon equivalent to y/x
+# so up first then across
+weather_grid_y, weather_grid_x = np.unravel_index(idx, grid_shape)
 
 # append the mapped data to the DataFrame
 crime_lat_lons_mapping['Latitude_HadUK'] = mapped_data[:,0]
 crime_lat_lons_mapping['Longitude_HadUK'] = mapped_data[:,1]
+crime_lat_lons_mapping['weather_grid_y'] = weather_grid_y
+crime_lat_lons_mapping['weather_grid_x'] = weather_grid_x
 
 
 #check distance mapping
@@ -306,7 +313,58 @@ test: Dataset = create_weather_df(month_in=months[25])
 # test['sun'].plot()
 
 
-test
+#get one month of the subset crime data
+# and join HadUK coords via lookup
+one_month_crime_query:str = f"""SELECT
+                                    "Crime ID",
+                                    Month,
+                                    crime.Latitude,
+                                    Latitude_HadUK,
+                                    crime.Longitude,
+                                    Longitude_HadUK,
+                               FROM crimetology_NS AS crime
+                               LEFT JOIN crimetology_coords_lookup AS coords
+                                   ON crime.Longitude = coords.Longitude 
+                                   AND crime.Latitude = coords.Latitude
+                               WHERE Month IN ('{months[23]}');"""
+
+con.execute(query=one_month_crime_query).df()
 
 
 
+one_month_coords_lookup_query:str = f"""SELECT DISTINCT
+                                                Latitude_HadUK,
+                                                Longitude_HadUK,
+                                        FROM crimetology_NS AS crime
+                                        LEFT JOIN crimetology_coords_lookup AS coords
+                                                ON crime.Longitude = coords.Longitude 
+                                                AND crime.Latitude = coords.Latitude
+                                        WHERE Month IN ('{months[23]}');"""
+all_coords: DataFrame = con.execute(query=one_month_coords_lookup_query).df()
+#flatten for the vertorised lookup
+lats = xr.DataArray(data=all_coords['Latitude_HadUK'].values, dims='points')
+lons = xr.DataArray(data=all_coords['Longitude_HadUK'].values, dims='points')
+
+
+
+
+
+
+test: Dataset = create_weather_df(month_in=months[23])
+
+for var in test.data_vars:
+        #skip meta vars
+        if var in ['transverse_mercator', \
+                   'time_bnds', \
+                   'projection_y_coordinate_bnds', \
+                   'projection_x_coordinate_bnds']:
+                   continue
+        print(var)
+
+test['tasmax'].sel(latitude=lats,longitude=lons,method='nearest')
+
+
+
+
+
+# %%
