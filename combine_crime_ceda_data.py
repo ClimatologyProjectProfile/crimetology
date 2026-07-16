@@ -264,3 +264,16 @@ for item in Path.iterdir(self=weather_data_dir):
 weather_vars: list = [key for key in weather_files_dict.keys()]
 weather_vars[5]
 weather_files_dict[weather_vars[5]]
+
+# month by month
+months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
+
+def get_weather_files(month) -> dict:
+        print(month)
+        year: str = month.split('-')[0]
+        print(year)
+        filtered_dict: dict= {key: [p for p in paths if year in str(object=p)] for key, paths in weather_files_dict.items()}
+        return(filtered_dict)
+
+#test
+get_weather_files(month=months[22])
