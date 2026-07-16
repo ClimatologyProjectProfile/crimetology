@@ -22,7 +22,7 @@ from pandas.core.frame import DataFrame
 import numpy as np
 from numpy import ndarray
 
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # ty:ignore[unresolved-import] because ty is wrong.
 #https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.cKDTree.html
 
 from _duckdb import DuckDBPyConnection
@@ -58,7 +58,7 @@ con: DuckDBPyConnection = duckdb.connect(database=crime_db)
 # introspect
 con.execute(query="SHOW TABLES").fetchall()
 con.execute(query="SELECT * FROM street_data LIMIT 5;").df()
-con.execute(query="SELECT COUNT(*) FROM street_data;").df()""
+con.execute(query="SELECT COUNT(*) FROM street_data;").df()
 
 # Look at data type for later filtering
 con.execute(query="""SELECT column_name, 
@@ -242,4 +242,25 @@ if make_table:
 con.execute(query="SELECT * FROM crimetology_coords_lookup LIMIT 30;").df()
 
 
-# %%
+
+#####################################################################
+#
+# Step Three: combine crime and weather data
+#
+#####################################################################
+
+## find weather vars as a list and store location of data files
+
+# make an empty dict to store the variable 
+# as a key and files with data as values
+weather_files_dict: dict={}
+for item in Path.iterdir(self=weather_data_dir):
+        if item.is_dir():
+                key: str = item.name
+                files_list: list[Path] = list(item.glob(pattern='*.nc'))
+                weather_files_dict[key]=files_list
+
+# have a look at the vars
+weather_vars: list = [key for key in weather_files_dict.keys()]
+weather_vars[5]
+weather_files_dict[weather_vars[5]]
