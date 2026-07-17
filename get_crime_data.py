@@ -19,6 +19,9 @@
 
 ###########################################################
 # %% Import modules
+from typing import Any
+from requests.models import Response
+from _duckdb import DuckDBPyConnection
 import zipfile
 import time
 import glob
@@ -41,21 +44,21 @@ del_archive_zips = True
 # %% Setup directories and paths
 # Create a data directory if it doesn't exist
 # Get the current working directory
-cwd = os.getcwd()
+cwd: str = os.getcwd()
 
-temp_dir_path = Path(cwd) / ' temp_dir.tmp' 
+temp_dir_path: Path = Path(cwd) / ' temp_dir.tmp' 
 
 #data dir for archives downloads (zips)
-data_dir = Path(cwd) / 'data' / 'police_archives'
+data_dir: Path = Path(cwd) / 'data' / 'police_archives'
 data_dir.mkdir(parents=True, exist_ok=True)
 
 # set the unzip location
-out_dir = Path(cwd) / 'data' / 'police_archives' / 'csvs'
+out_dir: Path = Path(cwd) / 'data' / 'police_archives' / 'csvs'
 out_dir.mkdir(parents=True, exist_ok=True)
 
 # create a log file to track which csvs
 # have been added to the duckdb
-log_file = data_dir / 'ingested_csvs.txt'
+log_file: Path = data_dir / 'ingested_csvs.txt'
 
 # archived data location (where to source zips from)
 base_url = "https://data.police.uk/data/archive/"
@@ -67,22 +70,22 @@ base_url = "https://data.police.uk/data/archive/"
 ## Only download needed data
 def is_already_processed(file_name):
     """Check if the file has been processed in a previous run."""
-    if not os.path.exists(log_file):
+    if not os.path.exists(path=log_file):
         return False
-    with open(log_file, 'r') as f:
-        processed = f.read().splitlines()
+    with open(log_file, mode='r') as f:
+        processed: list[str] = f.read().splitlines()
         # if processed already return True, else False
     return file_name in processed
 
 def date_processed(date_in):
     # if no log quickly exit
-    if not os.path.exists(log_file):
+    if not os.path.exists(path=log_file):
         return
     #otherwise
     # pattern to pull months
-    pattern = r'(\d{4}-\d{2})'
-    dates = []
-    with open(log_file, 'r') as f:
+    pattern= r'(\d{4}-\d{2})'
+    dates= []
+    with open(log_file, mode='r') as f:
         processed = f.read().splitlines()
         #pull all matchign patterns
         for line in processed:
@@ -97,10 +100,10 @@ def date_processed(date_in):
 
 
 ## set up download function
-headers = {'User-Agent': 'StreetDataDownloader/1.0 (github.com/ClimatologyProjectProfile)'}
+headers: dict[str, str] = {'User-Agent': 'StreetDataDownloader/1.0 (github.com/ClimatologyProjectProfile)'}
 
 ## Download function
-def download_archives(out_dir:Path):
+def download_archives():
     print(f"Connecting to {base_url}...")
     response = requests.get(base_url, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -111,25 +114,25 @@ def download_archives(out_dir:Path):
         if href.endswith('.zip'):
             file_url = urljoin(base_url, href)
             # get the file name from the URL with *.zip suffix
-            download_file_name = href.split('/')[-1]
+            download_file_name: str = href.split(sep='/')[-1]
             # isolate just the stem (i.e. file name)
-            file_stem = Path(download_file_name).stem
+            file_stem: str = Path(download_file_name).stem
             # ignore the nerighbourhood and latest data zips
             if 'neighbourhood' in file_stem or 'latest' in file_stem:
                 print(f"Skipping {download_file_name}, not a street data archive.")
                 continue
 
-            if date_processed(file_stem):
+            if date_processed(date_in=file_stem):
                 print(f"Skipping {download_file_name}, date already processed.")
             else:
                 # file has not been unzipped yet, so download it
-                download_path = data_dir / download_file_name
+                download_path: Path = data_dir / download_file_name
                 print(f"Downloading {download_file_name}...")
                 try:
                     # stream=True is more efficient for large ZIP files
                     with requests.get(file_url, headers=headers, stream=True) as r:
                         r.raise_for_status() # Check for errors
-                        with open(download_path, 'wb') as f:
+                        with open(file=download_path, mode='wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
                     print(f"Finished {download_file_name}")
@@ -145,14 +148,14 @@ if get_data:
     # checking against previously unzipped downloads in 
     # 'out_dir'
     print('----------------------------------------------')
-    print(f"Checking for new archive files to download...")
-    download_archives(out_dir)
+    print("Checking for new archive files to download...")
+    download_archives()
     print('----------------------------------------------')
     # now unzip any downloads 
     print(f"Processing archive files in {data_dir}...")
 
     # Find all zip files
-    zip_files = glob.glob(os.path.join(data_dir, "*.zip"))
+    zip_files: list[str] = glob.glob(pathname=os.path.join(data_dir, "*.zip"))
 
     if not zip_files:
         print("No zip files found to process.")
@@ -160,8 +163,8 @@ if get_data:
     for zip_file_path in zip_files:
         try:
             print(f"Extracting {os.path.basename(zip_file_path)}...")
-            with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-                zip_ref.extractall(out_dir)
+            with zipfile.ZipFile(file=zip_file_path, mode='r') as zip_ref:
+                zip_ref.extractall(path=out_dir)
             
             # Successfully extracted, now safely remove
             if del_archive_zips:
@@ -186,7 +189,7 @@ if get_data:
 ## Helper Functions
 def mark_as_processed(file_name):
     """Record a file as processed."""
-    with open(log_file, 'a') as f:
+    with open(log_file, mode='a') as f:
         f.write(f"{file_name}\n")
 
 def initialize_database(con, example_file_path:str|os.PathLike):
@@ -208,21 +211,21 @@ def initialize_database(con, example_file_path:str|os.PathLike):
 
 # %%
 
-def update_duckdb(csv_paths:list[str|os.PathLike]):
+def update_duckdb(csv_paths:list[str]):
     # put database at top level of data_dir
-    con = duckdb.connect(data_dir/'crime_archive.db')
+    con: DuckDBPyConnection = duckdb.connect(database=data_dir/'crime_archive.db')
     # Set memory limits and temp, to avoid crashing
-    con.execute("SET memory_limit='7GB'")
-    con.execute("SET streaming_buffer_size = '4GB';")
-    con.execute("SET preserve_insertion_order = false;")
+    con.execute(query="SET memory_limit='7GB'")
+    con.execute(query="SET streaming_buffer_size = '4GB';")
+    con.execute(query="SET preserve_insertion_order = false;")
     #enable a temp memory space to allow duckdb to spill to local
-    con.execute(f"""SET temp_directory = '{temp_dir_path}';""")
+    con.execute(query=f"""SET temp_directory = '{temp_dir_path}';""")
     # create the datatable if it doesn't exist  
     # Use the first CSV to initialize the table structure
-    initialize_database(con, csv_paths[0]) 
+    initialize_database(con, example_file_path=csv_paths[0]) 
     # Now ingest data from each CSV, skipping those already logged
     for csv_path in csv_paths:
-        file_name = os.path.basename(csv_path)
+        file_name: str = os.path.basename(csv_path)
         # Skip if already logged
         if is_already_processed(file_name):
             continue
@@ -230,7 +233,7 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
         print(f"Ingesting {file_name}...")
         # manually dedupe in chunks as not enough local RAM to form primary key :S
         try:
-            query = f"""INSERT INTO street_data
+            query = """INSERT INTO street_data
                         SELECT 
                          -- Manually deal with Crime ID (either use theirs or make a synthetic one if missing)
                         COALESCE(NULLIF("Crime ID", ''), 'NO_ID_' || uuid()) AS "Crime ID",
@@ -239,7 +242,7 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
                         WHERE NOT EXISTS (SELECT 1 
                                             FROM street_data AS existing 
                                             WHERE existing."Crime ID" = new_data."Crime ID");"""
-            con.execute(query,[str(csv_path)])
+            con.execute(query,parameters=[str(object=csv_path)])
             print(f"Processed {file_name}...")
             mark_as_processed(file_name)
             # delete the csv
@@ -252,7 +255,7 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
             time.sleep(2)
     # remove duplicates (crimes updated)
     try:
-        con.execute("""CREATE OR REPLACE TABLE cleaned_street_data AS
+        con.execute(query="""CREATE OR REPLACE TABLE cleaned_street_data AS
                             SELECT * EXCLUDE row_num
                             FROM (SELECT *, ROW_NUMBER() 
                                     OVER (PARTITION BY "CRIME ID" 
@@ -261,8 +264,8 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
                             WHERE row_num = 1;""")
         # if successfully cleaned swap out data
         try:  
-            con.execute("DROP TABLE street_data;")
-            con.execute("ALTER TABLE cleaned_street_data RENAME TO street_data;")
+            con.execute(query="DROP TABLE street_data;")
+            con.execute(query="ALTER TABLE cleaned_street_data RENAME TO street_data;")
         except Exception as e:
             print(f"street_data failed to dedup and update: {e}")
     except Exception as e:
@@ -275,17 +278,17 @@ def update_duckdb(csv_paths:list[str|os.PathLike]):
 # checking against the log file to avoid duplicates
 
 # find all *-street.csv files in the out_dir and its subdirectories
-csv_files_list = glob.glob(os.path.join(data_dir, "**", "*-street.csv"), recursive=True)
+csv_files_list: list[str] = glob.glob(pathname=os.path.join(data_dir, "**", "*-street.csv"), recursive=True)
 
 ## Run database update
-print("Found "+str(len(csv_files_list))+" csv files")
+print("Found "+str(object=len(csv_files_list))+" csv files")
 
 # %%  Duck DB update routine
 
 # Run Update (only is new csvs are found)
 if len(csv_files_list) > 0:
     print("Updating duckdb database with new csv files...")
-    update_duckdb(csv_files_list)
+    update_duckdb(csv_paths=csv_files_list)
     print("=== Finished updating duckdb database ===")
 
 # ===============================================================================================#

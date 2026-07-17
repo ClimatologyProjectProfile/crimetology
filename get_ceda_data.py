@@ -1,145 +1,153 @@
-#!/usr/bin/env python
-
 """
-Original script from:  https://github.com/cedadev/opendap-python-example/blob/master/remote_nc_with_token.py
-(downloaded 10.07.2026)
-remote_nc_with_token.py
-===================
-Python script for downloading a NetCDF file remotely from the CEDA archive.
+Script for downloading HadUK climate data from CEDA. 
+Part of the ETL process for the crimetology project.
+
 You will be prompted to provide your CEDA username and password the first time the script is run and
 again if the token cached from a previous attempt has expired.
+You can check your username here: https://accounts.ceda.ac.uk/realms/ceda/account/#/personal-info
+It is case sensitive.
+
+Access tokens can be generated and deleted here: https://services-beta.ceda.ac.uk/account/token/
+This script will automatically generate fresh tokens when needed
+
+accessing: https://catalogue.ceda.ac.uk/uuid/789b3065d74a4c948ab05d33556c86d0
+info: https://www.metoffice.gov.uk/research/climate/maps-and-data/data/haduk-grid/datasets
 """
-#% Import modules
+
+
+
+# %% import standard modules
 from requests.models import Response
-from typing import Any
-import json
-import os
+from bs4 import BeautifulSoup
 import requests
-import shutil
-from base64 import b64encode
-from datetime import datetime, timezone
-from getpass import getpass
-import xarray as xr
+import re
 from pathlib import Path
+import os
 
-# %% Sort out token
+#import custom code
+from access_ceda_data import get_file  #code orignally from ceda github
 
-# URL for the CEDA Token API service
-TOKEN_URL = "https://services-beta.ceda.ac.uk/api/token/create/"
-# Location on the filesystem to store a cached download token
-TOKEN_CACHE: str = os.path.expanduser(path=os.path.join("~", ".cedatoken"))
+######################################################
+## User Inputs
+######################################################
+start_year = 2016
+end_year = 2026
+
+# a list of which environmental vars we want
+# full list originally, commented out ones to initially skip
+var_list: list[str] = [#'airfrost',      # 
+                       'groundfrost',   #Count of days when the grass minimum temperature is below 0oC (days)
+                       'hurs',          #Mean relative humidity
+                       #'psl',           #Mean sea level pressure
+                       #'pv',            #Average of hourly (or 3-hourly) vapour pressure over the month, season or year (hPa)
+                       #'raindays10mm',  #
+                       #'raindays1mm',   #
+                       'rainfall',      #Total precipitation amount over the calendar month, season or year (mm)
+                       'sfcWind',       #Mean wind speed at 10 m
+                       'snowLying',     #Count of days with greater than 50% of the ground covered by snow at 0900 UTC
+                       #'summerdays',    #??
+                       'sun',           #Duration of bright sunshine during the month, season or year (hours)
+                       'tas',           #Average of daily mean air temperature over the calendar month, season or year (oC)
+                       'tasmax',        #Average of daily maximum air temperature over the calendar month, season or year (oC)
+                       'tasmin']        #Average of daily minimum air temperature over the calendar month, season or year (oC)
 
 
-def load_cached_token():
+
+
+######################################################
+
+# %% Setup directories and paths
+cwd: str = os.getcwd()
+data_dir: Path = Path(cwd) / 'data' / 'ceda' / 'raw' 
+# create a log file to track which cdfs
+# have been downloaded
+log_file: Path = data_dir / 'dowloaded_cdfs.txt'
+
+
+# %% Internal helper functions
+def _get_files_in_range(soup_obj, start_year:int, end_year:int):
+    # Regex date format pattern
+    pattern: re.Pattern[str] = re.compile(pattern=r'_(\d{4})\d{2}-\d{4}\d{2}\.nc$')
+    # start scooping up files of interest
+    selected_files: list = []
+    #just links
+    for link in soup_obj.find_all('a'):
+        href = link.get('href')
+        #now start filtering down to what we need
+        #1) netcdf files
+        if href and href.endswith('.nc'):
+            match: re.Match[str] | None = pattern.search(string=href)
+            if match:
+                # Extract the year contained (via first string match)
+                file_year = int(match.group(1))
+                # Check in range
+                if start_year <= file_year <= end_year:
+                    selected_files.append(href)
+    return selected_files
+
+def _find_files(var_in:str,start_year,end_year):
+    #create download path for variable in
+    url_in: str = "https://dap.ceda.ac.uk/badc/ukmo-hadobs/data/insitu/MOHC/HadOBS/HadUK-Grid/v1.3.2.ceda/1km/"+var_in+"/mon/v20260512/"
+    # connect to path and pull html containing all links (e.g. downloadable data)
+    print(f"Connecting for {var_in}...")
+    response: Response = requests.get(url_in)
+    #Note: headers not needed as this just looking at files
+    # no heavy lifting yet
+    soup=BeautifulSoup(markup=response.text, features='html.parser')
+    # now filter down to just the files needed
+    file_names_list:list= _get_files_in_range(soup,start_year,end_year)
+    files_list:list=[url_in+name for name in file_names_list]
+    return(files_list)
+
+## create a download log (this is from get_crime_data.py)
+## but i didnt make the code nicely enough and I have no 
+## clear entry point function to set as __name__=__main__ block. 
+# TODO ^^
+def _is_already_processed(file_name) -> bool:
     """
-    Read the token back out from its cache file.
-    Returns a tuple containing the token and its expiry timestamp
+    Check if the file has been processed in a previous run.
+    Returns True is the path is found in the log file
+    False if the path is not found in the log file. 
     """
-    # Read the token back out from its cache file
-    try:
-        with open(file=TOKEN_CACHE, mode="r") as cache_file:
-            data: Any = json.loads(cache_file.read())
+    if not os.path.exists(path=log_file):
+        return False
+    with open(log_file, mode='r') as f:
+        processed: list[str] = f.read().splitlines()
+        # if processed already return True, else False
+    return file_name in processed
 
-            token: Any = data.get("access_token")
-            expires: datetime = datetime.strptime(data.get("expires"), "%Y-%m-%dT%H:%M:%S.%f%z")
-            return token, expires
+#update the download log
+def _mark_as_processed(file_name):
+    """Record a file as processed."""
+    with open(log_file, mode='a') as f:
+        f.write(f"{file_name}\n")
 
-    except FileNotFoundError:
-        return None, None
+# %%
+def get_weather(start_year, end_year):
+    if __name__ == "__main__":
+        # Step One, find all download files
+        download_dict:dict={}
+        for var in var_list:
+            files: list = _find_files(var_in=var,start_year=start_year,end_year=end_year)
+            download_dict[var]=files
+        # Step Two, download the raw cdf data
+        for var in download_dict.keys():
+            for var,link_list in download_dict.items():
+                for link in link_list:
+                    if not _is_already_processed(file_name=link):
+                        try:
+                            # make sure save loc exists
+                            local_dir:Path = data_dir/var
+                            local_dir.mkdir(parents=True, exist_ok=True)
+                            #attempt to download file
+                            result: bool = get_file(url=link,var_id=var,save_loc=local_dir)
+                            if result:
+                                #successful so add to log
+                                _mark_as_processed(file_name=link)
+                        #something went wrong so print exception
+                        except Exception as e:
+                            print(f"An unexpected error occurred: {e}")
+    return
 
-
-def get_token():
-    """Fetches a download token, either from a cache file or
-     from the token API using CEDA login credentials.
-
-    Returns an active download token
-    """
-
-    # Check the cache file to see if we already have an active token
-    token, expires = load_cached_token()
-
-    # If no token has been cached or the token has expired, we get a new one
-    now: datetime = datetime.now(tz=timezone.utc)
-    if not token or expires < now:
-
-        if not token:
-            print(f"No previous token found at {TOKEN_CACHE}. ", end="")
-        else:
-            print(f"Token at {TOKEN_CACHE} has expired. ", end="")
-        print("Generating a fresh token...")
-
-        print("Please provide your CEDA username: ", end="")
-        username: str = input()
-        password: str = getpass(prompt="CEDA user password: ")
-
-        credentials: str = b64encode(s=f"{username}:{password}".encode("utf-8")).decode(
-            encoding="ascii"
-        )
-        headers: dict[str, str] = {
-            "Authorization": f"Basic {credentials}",
-        }
-        response: Response = requests.request("POST", TOKEN_URL, headers=headers)
-        if response.status_code == 200:
-
-            # The token endpoint returns JSON
-            response_data: Any = json.loads(response.text)
-            token: Any = response_data["access_token"]
-
-            # Store the JSON data in the cache file for future use
-            with open(file=TOKEN_CACHE, mode="w") as cache_file:
-                cache_file.write(response.text)
-
-        else:
-            print("Failed to generate token, check your username and password.")
-
-    else:
-        print(f"Found existing token at {TOKEN_CACHE}, skipping authentication.")
-
-    return token, expires
-
-
-
-# %% Download routine
-
-def download_dataset(url:str,save_loc:Path,download_token=None):
-    # isolate just the file name for saving
-    filename: str= Path(url).name
-    # headers should carry the download token so CEDA
-    # knows who we are
-    headers: dict = {"Authorization": f"Bearer {download_token}"} if download_token else {}
-    try:
-        with requests.Session() as session:
-            with session.get(url, headers=headers, stream=True) as response:
-                response.raise_for_status()
-                # Use shutil to copy the stream directly to the file
-                with open(file=save_loc/filename, mode='wb') as f:
-                    shutil.copyfileobj(fsrc=response.raw, fdst=f)
-        return True
-    ## catch some exception types with specific messages, generic at end. 
-    except requests.exceptions.RequestException as e:
-        print(f"Network/Request error while downloading {filename}: {e}")
-    except IOError as e:
-        print(f"File system error while saving {filename}: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-    return False 
-
-
-# %% Entry point function
-def get_file(url:str,var_id:str,save_loc):
-    "Download file located at provided url"
-    token, expires = get_token()
-    if token:
-        print(f"Fetching information about variable '{var_id}' using data URL: '{url}'")
-        if token:
-            print((f"Using download token '{token[:2]}...{token[-2:]}' for authentication."
-                f" Token expires at: {expires}."))
-        else:
-            print("No DOWNLOAD_TOKEN found in environment.")
-
-        # download and save
-        # this will return a True/False flag depending on 
-        # if error was raised (False = Error raised)
-        return download_dataset(url, save_loc, download_token=token)
-    else:
-        print("Aborting since we don't have a token.")
+# run the main function
+get_weather(start_year=2016,end_year=2026)
