@@ -338,102 +338,61 @@ def create_weather_df(month_in:str) -> DataFrame:
         return(result)
 
 def update_month_by_month():
+        # keep a record of which months are done
         # find all months
         months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
         # find all weather vars
         weather_vars: list = [key for key in weather_files_dict.keys()]
         #create these as a list for our later SQL JOIN
         select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
-        for month in months:
-            # for each month of data extract the corresponding weather
-            # data 
-            weather_staging:DataFrame = create_weather_df(month_in=month)
-            # register this as a tmp table
-            # (lets duckdb do the heavy lifting)
-            con.register(view_name='tmp_weather_table', python_object=weather_staging)
-            # join to the crimetology_NS subset
-            join_data_query:str = f"""SELECT crime.*,
-                                        {select_cols}
-                                        FROM crimetology_NS AS crime
-                                        LEFT JOIN crimetology_coords_lookup AS coords
-                                                ON crime.Longitude = coords.Longitude 
-                                                AND crime.Latitude = coords.Latitude
-                                        LEFT JOIN weather_staging AS staged
-                                                ON coords.weather_grid_y = staged.weather_grid_y
-                                                AND coords.weather_grid_x = staged.weather_grid_x
-                                        WHERE Month IN ('{month}');"""
-            data: DataFrame = con.execute(query=join_data_query).df()
-            print(f'Run for month {month}')
-            print(data.head())
+        # set current month 
+        current_month:str = ''
+        try:
+            con.execute(query="BEGIN TRANSACTION;")
+            for month in months:
+                # store the current month for error/issue reporting
+                current_month: str = str(object=month)
+                # for each month of data extract the corresponding weather
+                # data 
+                weather_staging:DataFrame = create_weather_df(month_in=month)
+                # register this as a tmp table
+                # (lets duckdb do the heavy lifting)
+                con.register(view_name='tmp_weather_table', python_object=weather_staging)
+                # join to the crimetology_NS subset
+                join_data_query:str = f"""UPDATE crimetology_NS AS crime
+                                              SET {select_cols}
+                                              FROM crimetology_coords_lookup AS coords,
+                                                   tmp_weather_table AS staged
+                                          WHERE crime.Longitude = coords.Longitude 
+                                              AND crime.Latitude = coords.Latitude
+                                              AND coords.weather_grid_y = staged.weather_grid_y
+                                              AND coords.weather_grid_x = staged.weather_grid_x
+                                              AND crime.Month = '{month}';"""
+                data: DataFrame = con.execute(query=join_data_query).df()
+                print(f'Run for month {month}')
+            # only commit once full update is completed
+            con.execute(query="COMMIT;")
+            print("All months updated and committed successfully.")
+        except duckdb.Error as e:
+            print(f"Database error during month {current_month}: {e}")
+            con.rollback()
+            raise
+        except Exception as e:
+            print(f"Unexpected error processing month {current_month}: {e}")
+            con.rollback()
+            raise
         #done all months now exit
         return
 
 
-
-
-
-#############################
-# Find all months
+#####################################################################
 #
+# Step Four: Run update routine to join weather to crime data
+#
+#####################################################################
 
-# month by month
-months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
-# figuring out how to append weather data for a test month
-weather_staging:DataFrame = create_weather_df(month_in=months[23])
-con.register(view_name='tmp_weather_table', python_object=weather_staging)
-
-
-## add this data to the table
-
-# #projection to points sanity check:
-# join_data_query:str = f"""SELECT coords.Latitude_HadUK,
-#                                  staged.latitude,
-#                                  coords.Longitude_HadUK,
-#                                  staged.longitude
-#                                 FROM crimetology_NS AS crime
-#                                 LEFT JOIN crimetology_coords_lookup AS coords
-#                                         ON crime.Longitude = coords.Longitude 
-#                                         AND crime.Latitude = coords.Latitude
-#                                 LEFT JOIN weather_staging AS staged
-#                                         ON coords.weather_grid_y = staged.weather_grid_y
-#                                         AND coords.weather_grid_x = staged.weather_grid_x
-#                                 WHERE Month IN ('{months[23]}');"""
-# con.execute(query=join_data_query).df()
-# #all looks good!
-
-# # have a look
-# select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
-# join_data_query:str = f"""SELECT crime.*,
-#                                 {select_cols}
-#                                 FROM crimetology_NS AS crime
-#                                 LEFT JOIN crimetology_coords_lookup AS coords
-#                                         ON crime.Longitude = coords.Longitude 
-#                                         AND crime.Latitude = coords.Latitude
-#                                 LEFT JOIN weather_staging AS staged
-#                                         ON coords.weather_grid_y = staged.weather_grid_y
-#                                         AND coords.weather_grid_x = staged.weather_grid_x
-#                                 WHERE Month IN ('{months[23]}');"""
-# con.execute(query=join_data_query).df()
-
-
-
-
-# update query - need this as a function.... staged with be 
-# made for each month
-select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
-#update_query = f"""UPDATE crimetology_NS AS crime
-#                SET {select_cols}
-#                        FROM crimetology_coords_lookup AS coords,
-#                                weather_staging AS staged
-#                        WHERE crime.Longitude = coords.Longitude 
-#                                AND crime.Latitude = coords.Latitude
-#                                AND coords.weather_grid_y = staged.weather_grid_y
-#                                AND coords.weather_grid_x = staged.weather_grid_x
-#                                AND crime.Month = '{month}';
-#"""
-#con.execute(update_query)
-
-
+### Main 'entry point function' here
+##
 
 if make_table:
         for month in months:
