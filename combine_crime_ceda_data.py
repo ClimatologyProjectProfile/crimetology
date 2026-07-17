@@ -339,28 +339,43 @@ def create_weather_df(month_in:str) -> DataFrame:
         return(result)
 
 
-def update_month_by_month():        
+
+# %% 
+def update_month_by_month() -> list:
+        ###########################
+        # setup ready for updates
+        ###########################
         # find all months
         months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
         # find all weather vars
         weather_vars: list = [key for key in weather_files_dict.keys()]
-        #create these as a list for our later SQL JOIN
-        select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
-
+        #create these as a list for our later SQL SET command
+        # !need to map new crime col to staged data column
+        # with an '='
+        new_cols: str = ", ".join([f"{var} = staged.{var}" for var in weather_vars])
+        # update the crimetology_NS table with columns needed
+        # otherwise the UPDATE wont work
+        existing_cols: list = [row[0] for row in con.execute("DESCRIBE crimetology_NS;").fetchall()]
+        for var in weather_vars:
+            if var not in existing_cols:
+                print(f"Adding missing column '{var}' to crimetology_NS...")
+                # only need single (6 s.f. stored)
+                con.execute(query=f"ALTER TABLE crimetology_NS ADD COLUMN {var} SINGLE;")
+        
+        ###########################
+        # Attempt updates
+        ###########################
         # keep a record of which months are done
         completed_months: set = set()
         # set how many retires are allowed
         max_retries = 3
-
         for month in months:
             # check to see if this is already ingested
             if month in completed_months:
                 print(f"Month {month} already completed. Skipping.")
                 continue
-
             attempt = 0
             success = False
-
             while attempt < max_retries and not success:
                 try:
                     attempt += 1
@@ -375,14 +390,14 @@ def update_month_by_month():
                     con.register(view_name='tmp_weather_table', python_object=weather_staging)
                     # join to the crimetology_NS subset
                     join_data_query:str = f"""UPDATE crimetology_NS AS crime
-                                                  SET {select_cols}
-                                                  FROM crimetology_coords_lookup AS coords,
-                                                       tmp_weather_table AS staged
-                                        WHERE crime.Longitude = coords.Longitude 
+                                              SET {new_cols}
+                                              FROM crimetology_coords_lookup AS coords,
+                                                  tmp_weather_table AS staged
+                                              WHERE crime.Longitude = coords.Longitude 
                                                   AND crime.Latitude = coords.Latitude
-                                                 AND coords.weather_grid_y = staged.weather_grid_y
-                                                AND coords.weather_grid_x = staged.weather_grid_x
-                                                AND crime.Month = '{month}';"""
+                                                  AND coords.weather_grid_y = staged.weather_grid_y
+                                                  AND coords.weather_grid_x = staged.weather_grid_x
+                                                  AND crime.Month = '{month}';"""
                     con.execute(query=join_data_query)
                     con.execute(query="COMMIT;")
                     # Log completion
@@ -391,8 +406,7 @@ def update_month_by_month():
                     print('******************************')
                     print(f'Run for month {month}')
                     print(f"Success at attempt {attempt}")
-                    print('******************************')
-                
+                    print('******************************')                
                 except (duckdb.Error, Exception) as e:
                     print(f"Error on month {month} during attempt {attempt}: {e}")
                     # Attempt to rollback month that has an issue
@@ -406,8 +420,7 @@ def update_month_by_month():
                         time.sleep(10)
                         continue
             if not success:
-                print(f"Month {month} failed permanently after {max_retries} attempts.")
-        
+                print(f"Month {month} failed permanently after {max_retries} attempts.")        
         # unsuccesful months
         hard_fails: list = [month for month in months if month not in completed_months]
         #done all months now exit
@@ -426,4 +439,14 @@ def update_month_by_month():
 
 if make_table:
     # run update routine
-    update_month_by_month()
+    failures: list = update_month_by_month()
+    if len(failures) !=0:
+        print('****************************************************')
+        print(' !! WARNING !!')
+        print(f' Update Routine Failed for {len(failures)} months.')
+        print(' These are: ')
+        for failure in failures:
+                print(f' {failure}\n ')
+        print('****************************************************')
+
+con.close()
