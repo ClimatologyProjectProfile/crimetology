@@ -358,9 +358,8 @@ def update_month_by_month() -> list:
         existing_cols: list = [row[0] for row in con.execute("DESCRIBE crimetology_NS;").fetchall()]
         for var in weather_vars:
             if var not in existing_cols:
-                print(f"Adding missing column '{var}' to crimetology_NS...")
-                # only need single (6 s.f. stored)
-                con.execute(query=f"ALTER TABLE crimetology_NS ADD COLUMN {var} SINGLE;")
+                print(f"Adding missing column '{var}' to crimetology_NS")
+                con.execute(query=f"ALTER TABLE crimetology_NS ADD COLUMN {var} FLOAT;")
         
         ###########################
         # Attempt updates
