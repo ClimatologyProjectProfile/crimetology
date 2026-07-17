@@ -13,9 +13,10 @@ Mapping from lat lon to the 1km grid
 
 ###########################################################
 # %% Import modules
-from scipy.constants import c
+#from scipy.constants import c
 import os
 from pathlib import Path
+import time
 
 import xarray as xr
 from xarray.core.dataset import Dataset
@@ -40,7 +41,7 @@ weather_data_dir: Path = Path(cwd) / 'data' / 'ceda' / 'raw'
 
 ############################################################
 # %% User Inputs
-make_table:bool = False
+make_table:bool = True
 
 
 #####################################################################
@@ -155,13 +156,13 @@ crime_lat_lons_mapping: DataFrame = con.execute(query=crime_lat_lons_query).df()
 #data quality check (if nans / inf the tree wont work)
 for row in np.isnan(crime_lat_lons_mapping).sum():
     if row!=0:
-        print(f'Issue: latitude longitude in crimetology_NS have nans present.')
+        print('Issue: latitude longitude in crimetology_NS have nans present.')
         print(np.isnan(crime_lat_lons_mapping).sum())
 # 0 
 
 for row in np.isinf(crime_lat_lons_mapping).sum():
     if row!=0:
-        print(f'Issue: latitude longitude in crimetology_NS have infs present.')
+        print('Issue: latitude longitude in crimetology_NS have infs present.')
         print(np.isinf(crime_lat_lons_mapping).sum())
 # 0
 
@@ -337,52 +338,80 @@ def create_weather_df(month_in:str) -> DataFrame:
         result: DataFrame = pd.concat(objs=[grid_indicies, all_data], axis=1)
         return(result)
 
-def update_month_by_month():
-        # keep a record of which months are done
+
+def update_month_by_month():        
         # find all months
         months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
         # find all weather vars
         weather_vars: list = [key for key in weather_files_dict.keys()]
         #create these as a list for our later SQL JOIN
         select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
-        # set current month 
-        current_month:str = ''
-        try:
-            con.execute(query="BEGIN TRANSACTION;")
-            for month in months:
-                # store the current month for error/issue reporting
-                current_month: str = str(object=month)
-                # for each month of data extract the corresponding weather
-                # data 
-                weather_staging:DataFrame = create_weather_df(month_in=month)
-                # register this as a tmp table
-                # (lets duckdb do the heavy lifting)
-                con.register(view_name='tmp_weather_table', python_object=weather_staging)
-                # join to the crimetology_NS subset
-                join_data_query:str = f"""UPDATE crimetology_NS AS crime
-                                              SET {select_cols}
-                                              FROM crimetology_coords_lookup AS coords,
-                                                   tmp_weather_table AS staged
-                                          WHERE crime.Longitude = coords.Longitude 
-                                              AND crime.Latitude = coords.Latitude
-                                              AND coords.weather_grid_y = staged.weather_grid_y
-                                              AND coords.weather_grid_x = staged.weather_grid_x
-                                              AND crime.Month = '{month}';"""
-                data: DataFrame = con.execute(query=join_data_query).df()
-                print(f'Run for month {month}')
-            # only commit once full update is completed
-            con.execute(query="COMMIT;")
-            print("All months updated and committed successfully.")
-        except duckdb.Error as e:
-            print(f"Database error during month {current_month}: {e}")
-            con.rollback()
-            raise
-        except Exception as e:
-            print(f"Unexpected error processing month {current_month}: {e}")
-            con.rollback()
-            raise
+
+        # keep a record of which months are done
+        completed_months: set = set()
+        # set how many retires are allowed
+        max_retries = 3
+
+        for month in months:
+            # check to see if this is already ingested
+            if month in completed_months:
+                print(f"Month {month} already completed. Skipping.")
+                continue
+
+            attempt = 0
+            success = False
+
+            while attempt < max_retries and not success:
+                try:
+                    attempt += 1
+                    print(f"Processing month {month} (Attempt {attempt}/{max_retries})...")
+                    # Start safe transaction
+                    con.execute(query="BEGIN TRANSACTION;")
+                    # for each month of data extract the corresponding weather
+                    # data 
+                    weather_staging:DataFrame = create_weather_df(month_in=month)
+                    # register this as a tmp table
+                    # (lets duckdb do the heavy lifting)
+                    con.register(view_name='tmp_weather_table', python_object=weather_staging)
+                    # join to the crimetology_NS subset
+                    join_data_query:str = f"""UPDATE crimetology_NS AS crime
+                                                  SET {select_cols}
+                                                  FROM crimetology_coords_lookup AS coords,
+                                                       tmp_weather_table AS staged
+                                        WHERE crime.Longitude = coords.Longitude 
+                                                  AND crime.Latitude = coords.Latitude
+                                                 AND coords.weather_grid_y = staged.weather_grid_y
+                                                AND coords.weather_grid_x = staged.weather_grid_x
+                                                AND crime.Month = '{month}';"""
+                    con.execute(query=join_data_query)
+                    con.execute(query="COMMIT;")
+                    # Log completion
+                    success = True
+                    completed_months.add(month)
+                    print('******************************')
+                    print(f'Run for month {month}')
+                    print(f"Success at attempt {attempt}")
+                    print('******************************')
+                
+                except (duckdb.Error, Exception) as e:
+                    print(f"Error on month {month} during attempt {attempt}: {e}")
+                    # Attempt to rollback month that has an issue
+                    try:
+                        con.execute(query="ROLLBACK;")
+                    except (duckdb.Error, Exception) as e:
+                       print(f"Error on roll back of month {month} during attempt {attempt}: {e}")
+                       pass
+                    if attempt < max_retries:
+                        print("Retrying in 10 seconds...")
+                        time.sleep(10)
+                        continue
+            if not success:
+                print(f"Month {month} failed permanently after {max_retries} attempts.")
+        
+        # unsuccesful months
+        hard_fails: list = [month for month in months if month not in completed_months]
         #done all months now exit
-        return
+        return (hard_fails)
 
 
 #####################################################################
@@ -391,8 +420,10 @@ def update_month_by_month():
 #
 #####################################################################
 
+##
 ### Main 'entry point function' here
 ##
 
 if make_table:
-        for month in months:
+    # run update routine
+    update_month_by_month()
