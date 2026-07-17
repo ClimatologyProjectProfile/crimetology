@@ -43,10 +43,6 @@ weather_data_dir: Path = Path(cwd) / 'data' / 'ceda' / 'raw'
 make_table:bool = False
 
 
-
-
-
-
 #####################################################################
 #
 # Step One: Create a subset of crime data for the project
@@ -57,34 +53,34 @@ make_table:bool = False
 # set up duck db connection
 con: DuckDBPyConnection = duckdb.connect(database=crime_db)
 
-# introspect
-con.execute(query="SHOW TABLES").fetchall()
-con.execute(query="SELECT * FROM street_data LIMIT 5;").df()
-con.execute(query="SELECT COUNT(*) FROM street_data;").df()
+# # introspect
+# con.execute(query="SHOW TABLES").fetchall()
+# con.execute(query="SELECT * FROM street_data LIMIT 5;").df()
+# con.execute(query="SELECT COUNT(*) FROM street_data;").df()
 
-# Look at data type for later filtering
-con.execute(query="""SELECT column_name, 
-                            data_type 
-                     FROM information_schema.columns 
-                     WHERE table_name = 'street_data' 
-                        AND column_name = 'Month';"""
-             ).fetchall()
-# Month column is VARCHAR
+# # Look at data type for later filtering
+# con.execute(query="""SELECT column_name, 
+#                             data_type 
+#                      FROM information_schema.columns 
+#                      WHERE table_name = 'street_data' 
+#                         AND column_name = 'Month';"""
+#              ).fetchall()
+# # Month column is VARCHAR
 
-# have a look at all months
-con.execute(query="""SELECT DISTINCT 
-                            Month 
-                    FROM street_data 
-                    WHERE Month BETWEEN '2016-01' AND '2025-12'
-                    ORDER BY Month;
-                    """).df()
-# 120 rows found so it is getting the time filtering ok 
+# # have a look at all months
+# con.execute(query="""SELECT DISTINCT 
+#                             Month 
+#                     FROM street_data 
+#                     WHERE Month BETWEEN '2016-01' AND '2025-12'
+#                     ORDER BY Month;
+#                     """).df()
+# # 120 rows found so it is getting the time filtering ok 
 
 
-# look at owning forces for later filtering
-force_list: DataFrame = con.execute(query="""SELECT DISTINCT "Falls Within" FROM street_data;""").df()
-# Norfolk: Norfolk Constabulary
-# Suffolk: Suffolk Constabulary
+# # look at owning forces for later filtering
+# force_list: DataFrame = con.execute(query="""SELECT DISTINCT "Falls Within" FROM street_data;""").df()
+# # Norfolk: Norfolk Constabulary
+# # Suffolk: Suffolk Constabulary
 
 
 ## Interesting question: Initially looking at Norfolk and Suffolk
@@ -124,10 +120,10 @@ if make_table:
 # original street data archive = 92362169
 
 
-#now open and have a look
-con.execute(query="SHOW TABLES").fetchall()
-con.execute(query="SELECT * FROM crimetology_NS LIMIT 15;").df()
-con.execute(query="SELECT COUNT(*) FROM crimetology_NS;").df()
+# #now open and have a look
+# con.execute(query="SHOW TABLES").fetchall()
+# con.execute(query="SELECT * FROM crimetology_NS LIMIT 15;").df()
+# con.execute(query="SELECT COUNT(*) FROM crimetology_NS;").df()
 
 
 
@@ -148,18 +144,25 @@ crime_lat_lons_query:str = """ SELECT DISTINCT
                                   FROM crimetology_NS;""" 
 crime_lat_lons_mapping: DataFrame = con.execute(query=crime_lat_lons_query).df()
 
-crime_lat_lons_mapping.shape
-# 56205 distinct lat, lon entries 
+# crime_lat_lons_mapping.shape
+# # 56205 distinct lat, lon entries 
 
-# have a look at an entry
-crime_lat_lons_mapping.head()
-#introspect
-crime_lat_lons_mapping.info()
+# # have a look at an entry
+# crime_lat_lons_mapping.head()
+# #introspect
+# crime_lat_lons_mapping.info()
 
 #data quality check (if nans / inf the tree wont work)
-np.isnan(crime_lat_lons_mapping).sum()
+for row in np.isnan(crime_lat_lons_mapping).sum():
+    if row!=0:
+        print(f'Issue: latitude longitude in crimetology_NS have nans present.')
+        print(np.isnan(crime_lat_lons_mapping).sum())
 # 0 
-np.isinf(crime_lat_lons_mapping).sum()
+
+for row in np.isinf(crime_lat_lons_mapping).sum():
+    if row!=0:
+        print(f'Issue: latitude longitude in crimetology_NS have infs present.')
+        print(np.isinf(crime_lat_lons_mapping).sum())
 # 0
 
 
@@ -179,11 +182,11 @@ cdf_format_check_file: Dataset = xr.open_dataset(filename_or_obj=weather_data_di
 HadUK_lats: ndarray = cdf_format_check_file['latitude'].values
 HadUK_lons: ndarray = cdf_format_check_file['longitude'].values
 
-# have a look
-HadUK_lats
-HadUK_lons
-#both have shape (1450,900)
-#expected ravelled length is 1305000
+# # have a look
+# HadUK_lats
+# HadUK_lons
+# #both have shape (1450,900)
+# #expected ravelled length is 1305000
 
 #create all HadUK lat/lon pairs (=1540x900 pairs)
 HadUK_latlon_grid_points = np.column_stack([HadUK_lats.ravel(),HadUK_lons.ravel()])
@@ -202,12 +205,12 @@ max_hadUK_lon = np.abs([HadUK_lons[i+1]-HadUK_lons[i] for i in range(len(HadUK_l
 # do a closest value lookup. Efficient method is scipy cKDTree
 tree = cKDTree(HadUK_latlon_grid_points)
 
-# test nearest neigbour lookup on one point
-crime_test_coord = crime_lat_lons_mapping.iloc[25]
-_,i = tree.query(crime_test_coord)
-#looks sensible
-print(crime_test_coord)
-print(HadUK_latlon_grid_points[i,:])
+# # test nearest neigbour lookup on one point
+# crime_test_coord = crime_lat_lons_mapping.iloc[25]
+# _,i = tree.query(crime_test_coord)
+# #looks sensible
+# print(crime_test_coord)
+# print(HadUK_latlon_grid_points[i,:])
 
 
 # %% Now map the crime points to the nearest neighbour 
@@ -224,14 +227,14 @@ crime_lat_lons_mapping['weather_grid_y'] = weather_grid_y
 crime_lat_lons_mapping['weather_grid_x'] = weather_grid_x
 
 
-#check distance mapping
-(np.abs((crime_lat_lons_mapping['Latitude']-crime_lat_lons_mapping['Latitude_HadUK']))>max_hadUK_lat).sum()
-# all latitudes within one gridcell
+# #check distance mapping
+# (np.abs((crime_lat_lons_mapping['Latitude']-crime_lat_lons_mapping['Latitude_HadUK']))>max_hadUK_lat).sum()
+# # all latitudes within one gridcell
 
-((np.abs(crime_lat_lons_mapping['Longitude']-crime_lat_lons_mapping['Longitude_HadUK'])) > 3*max_hadUK_lon).sum()
-#32603 over one grid cell away (~1km)
-#9009 over two grid cells away (~2km)
-# All within three gridcells (~3km)
+# ((np.abs(crime_lat_lons_mapping['Longitude']-crime_lat_lons_mapping['Longitude_HadUK'])) > 3*max_hadUK_lon).sum()
+# #32603 over one grid cell away (~1km)
+# #9009 over two grid cells away (~2km)
+# # All within three gridcells (~3km)
 
 ## since the crime data lat/lon points are anonymysed with data points
 # over 20km away being discarded, this is adding only around a 10%
@@ -247,8 +250,8 @@ if make_table:
                                 SELECT * 
                                 FROM coords_mapping_df;""")
 
-# check the table is stored in the duckdb
-con.execute(query="SELECT * FROM crimetology_coords_lookup LIMIT 30;").df()
+# # check the table is stored in the duckdb
+# con.execute(query="SELECT * FROM crimetology_coords_lookup LIMIT 30;").df()
 
 
 
@@ -269,10 +272,10 @@ for item in Path.iterdir(self=weather_data_dir):
                 files_list: list[Path] = list(item.glob(pattern='*.nc'))
                 weather_files_dict[key]=files_list
 
-# have a look at the vars
-weather_vars: list = [key for key in weather_files_dict.keys()]
-weather_vars[5]
-weather_files_dict[weather_vars[5]]
+# # have a look at the vars
+# weather_vars: list = [key for key in weather_files_dict.keys()]
+# weather_vars[5]
+# weather_files_dict[weather_vars[5]]
 
 ## helper functions for pulling the weather data for 
 # the crimetology subset table
@@ -334,6 +337,39 @@ def create_weather_df(month_in:str) -> DataFrame:
         result: DataFrame = pd.concat(objs=[grid_indicies, all_data], axis=1)
         return(result)
 
+def update_month_by_month():
+        # find all months
+        months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
+        # find all weather vars
+        weather_vars: list = [key for key in weather_files_dict.keys()]
+        #create these as a list for our later SQL JOIN
+        select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
+        for month in months:
+            # for each month of data extract the corresponding weather
+            # data 
+            weather_staging:DataFrame = create_weather_df(month_in=month)
+            # register this as a tmp table
+            # (lets duckdb do the heavy lifting)
+            con.register(view_name='tmp_weather_table', python_object=weather_staging)
+            # join to the crimetology_NS subset
+            join_data_query:str = f"""SELECT crime.*,
+                                        {select_cols}
+                                        FROM crimetology_NS AS crime
+                                        LEFT JOIN crimetology_coords_lookup AS coords
+                                                ON crime.Longitude = coords.Longitude 
+                                                AND crime.Latitude = coords.Latitude
+                                        LEFT JOIN weather_staging AS staged
+                                                ON coords.weather_grid_y = staged.weather_grid_y
+                                                AND coords.weather_grid_x = staged.weather_grid_x
+                                        WHERE Month IN ('{month}');"""
+            data: DataFrame = con.execute(query=join_data_query).df()
+            print(f'Run for month {month}')
+            print(data.head())
+        #done all months now exit
+        return
+
+
+
 
 
 #############################
@@ -342,8 +378,6 @@ def create_weather_df(month_in:str) -> DataFrame:
 
 # month by month
 months: ndarray= np.array(object=con.execute(query="SELECT DISTINCT Month FROM crimetology_NS;").df()).flatten()
-
-
 # figuring out how to append weather data for a test month
 weather_staging:DataFrame = create_weather_df(month_in=months[23])
 con.register(view_name='tmp_weather_table', python_object=weather_staging)
@@ -367,19 +401,19 @@ con.register(view_name='tmp_weather_table', python_object=weather_staging)
 # con.execute(query=join_data_query).df()
 # #all looks good!
 
-# have a look
-select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
-join_data_query:str = f"""SELECT crime.*,
-                                {select_cols}
-                                FROM crimetology_NS AS crime
-                                LEFT JOIN crimetology_coords_lookup AS coords
-                                        ON crime.Longitude = coords.Longitude 
-                                        AND crime.Latitude = coords.Latitude
-                                LEFT JOIN weather_staging AS staged
-                                        ON coords.weather_grid_y = staged.weather_grid_y
-                                        AND coords.weather_grid_x = staged.weather_grid_x
-                                WHERE Month IN ('{months[23]}');"""
-con.execute(query=join_data_query).df()
+# # have a look
+# select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
+# join_data_query:str = f"""SELECT crime.*,
+#                                 {select_cols}
+#                                 FROM crimetology_NS AS crime
+#                                 LEFT JOIN crimetology_coords_lookup AS coords
+#                                         ON crime.Longitude = coords.Longitude 
+#                                         AND crime.Latitude = coords.Latitude
+#                                 LEFT JOIN weather_staging AS staged
+#                                         ON coords.weather_grid_y = staged.weather_grid_y
+#                                         AND coords.weather_grid_x = staged.weather_grid_x
+#                                 WHERE Month IN ('{months[23]}');"""
+# con.execute(query=join_data_query).df()
 
 
 
@@ -398,3 +432,8 @@ select_cols: str = ", ".join([f"staged.{var}" for var in weather_vars])
 #                                AND crime.Month = '{month}';
 #"""
 #con.execute(update_query)
+
+
+
+if make_table:
+        for month in months:
