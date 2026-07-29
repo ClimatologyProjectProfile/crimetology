@@ -1,105 +1,294 @@
-test push
 #######################################################################
+# This script is deigned to be used with conda env
+# crime_weather env
+#
 # Script to download UK police crime data from 
-# Kaggle and the official rolling archive,
-# consolidate it using DuckDB, and export 
-# a clean Parquet file for analysis.    
+# the official rolling archive
+#  
+# Script is in two halves - first downloads and unzips new archive data, 
+# second ingests into local duckdb database.
+# 
+#  ! Initial run is slow - duckdb method here is inefficient for 
+#  large data sets, but it is a simple approach to get started.   
+#  Needs to be improved for future runs/batched.
+#
+# 22/06/2026 - Data spanning  2010-12 to 2016-04 uploaded to 
+# an open access Zenodo repo https://doi.org/10.5281/zenodo.20798154
 #######################################################################
 
 
 ###########################################################
 # %% Import modules
+from typing import Any
+from requests.models import Response
+from _duckdb import DuckDBPyConnection
+import zipfile
+import time
+import glob
 import os
 import duckdb
-import kaggle
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+from pathlib import Path
+import re
+import pandas as pd
 
-# Note: kaggle credential need to be set up  
-# in ~/.kaggle/access_token
+
+###########################################################
+# %%User Inputs 
+get_data = True
+del_archive_zips = True
 
 ############################################################
-# %%
+# %% Setup directories and paths
 # Create a data directory if it doesn't exist
-os.makedirs('data', exist_ok=True)
+# Get the current working directory
+cwd: str = os.getcwd()
+
+temp_dir_path: Path = Path(cwd) / ' temp_dir.tmp' 
+
+#data dir for archives downloads (zips)
+data_dir: Path = Path(cwd) / 'data' / 'police_archives'
+data_dir.mkdir(parents=True, exist_ok=True)
+
+# set the unzip location
+out_dir: Path = Path(cwd) / 'data' / 'police_archives' / 'csvs'
+out_dir.mkdir(parents=True, exist_ok=True)
+
+# create a log file to track which csvs
+# have been added to the duckdb
+log_file: Path = data_dir / 'ingested_csvs.txt'
+
+# archived data location (where to source zips from)
+base_url = "https://data.police.uk/data/archive/"
+
+# ===============================================================================================#
+# %% Load in Download function
+
+## Helper Function
+## Only download needed data
+def is_already_processed(file_name):
+    """Check if the file has been processed in a previous run."""
+    if not os.path.exists(path=log_file):
+        return False
+    with open(log_file, mode='r') as f:
+        processed: list[str] = f.read().splitlines()
+        # if processed already return True, else False
+    return file_name in processed
+
+def date_processed(date_in):
+    # if no log quickly exit
+    if not os.path.exists(path=log_file):
+        return
+    #otherwise
+    # pattern to pull months
+    pattern= r'(\d{4}-\d{2})'
+    dates= []
+    with open(log_file, mode='r') as f:
+        processed = f.read().splitlines()
+        #pull all matchign patterns
+        for line in processed:
+            dates.append(re.search(pattern, line).group(1))
+    # keep just one for reference
+    dates = list(set(dates))
+    #Retrun True if Present, False otherwise
+    date_to_check = re.search(pattern, date_in).group(1)
+    return( date_to_check in dates )
 
 
-# --- 2. DOWNLOAD HISTORICAL DATA FROM KAGGLE API ---
-print("Downloading historical data via Kaggle API...")
-# This downloads the mexwell/uk-police-data dataset and automatically unzips it
-kaggle.api.dataset_download_files(
-    'mexwell/uk-police-data', 
-    path='data/kaggle_uk_police', 
-    unzip=True
-)
-print("Kaggle download and extraction complete!")
 
 
-# --- 3. DUCKDB CONSOLIDATION PIPELINE ---
-print("\nInitializing DuckDB engine...")
-con = duckdb.connect('crime_weather.db')
+## set up download function
+headers: dict[str, str] = {'User-Agent': 'StreetDataDownloader/1.0 (github.com/ClimatologyProjectProfile)'}
 
-# Install and load the httpfs extension so DuckDB can read URLs directly
-con.execute("INSTALL httpfs; LOAD httpfs;")
+## Download function
+def download_archives():
+    print(f"Connecting to {base_url}...")
+    response = requests.get(base_url, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Find all links ending in .zip
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if href.endswith('.zip'):
+            file_url = urljoin(base_url, href)
+            # get the file name from the URL with *.zip suffix
+            download_file_name: str = href.split(sep='/')[-1]
+            # isolate just the stem (i.e. file name)
+            file_stem: str = Path(download_file_name).stem
+            # ignore the nerighbourhood and latest data zips
+            if 'neighbourhood' in file_stem or 'latest' in file_stem:
+                print(f"Skipping {download_file_name}, not a street data archive.")
+                continue
 
-# URL format for data.police.uk rolling 3-year archives
-# We can dynamically target the latest file (e.g., '2024-12.zip' or similar)
-latest_archive_url = "https://data.police.uk/data/archive/2024-12.zip"
-
-print(f"Streaming and merging data from official rolling archive URL and local Kaggle files...")
-
-# SQL Query that streams from the web AND reads the local extracted Kaggle files,
-# uses UNION to drop duplicates, filters out null coordinates, and maps street records.
-build_query = f"""
-CREATE OR REPLACE VIEW unified_crime_raw AS
-
--- Source A: Official rolling archive streamed directly over HTTP
-SELECT 
-    "Month" AS month,
-    "Crime type" AS crime_type,
-    CAST("Latitude" AS DOUBLE) AS lat,
-    CAST("Longitude" AS DOUBLE) AS lon
-FROM read_csv_auto('{latest_archive_url}/**/*.csv')
-WHERE "Latitude" IS NOT NULL 
-  AND "Longitude" IS NOT NULL
-  AND File_Name LIKE '%street%'
-
-UNION
-
--- Source B: Historical Kaggle files downloaded via API
-SELECT 
-    "Month" AS month,
-    "Crime type" AS crime_type,
-    CAST("Latitude" AS DOUBLE) AS lat,
-    CAST("Longitude" AS DOUBLE) AS lon
-FROM read_csv_auto('data/kaggle_uk_police/**/*.csv')
-WHERE "Latitude" IS NOT NULL 
-  AND "Longitude" IS NOT NULL
-  AND File_Name LIKE '%street%';
-"""
-
-con.execute(build_query)
-print("Unified dataset compiled in memory. Exporting to Parquet...")
-
-# Export sorted dataset to Parquet
-con.execute("""
-    COPY (
-        SELECT month, crime_type, lat, lon 
-        FROM unified_crime_raw
-        ORDER BY month, crime_type
-    ) TO 'combined_crime_data.parquet' (FORMAT PARQUET);
-""")
-
-print("Success! 'combined_crime_data.parquet' is ready.")
+            if date_processed(date_in=file_stem):
+                print(f"Skipping {download_file_name}, date already processed.")
+            else:
+                # file has not been unzipped yet, so download it
+                download_path: Path = data_dir / download_file_name
+                print(f"Downloading {download_file_name}...")
+                try:
+                    # stream=True is more efficient for large ZIP files
+                    with requests.get(file_url, headers=headers, stream=True) as r:
+                        r.raise_for_status() # Check for errors
+                        with open(file=download_path, mode='wb') as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                    print(f"Finished {download_file_name}")
+                except Exception as e:
+                    print(f"Failed to download {download_file_name}: {e}")
 
 
-# --- 4. VERIFY RESULTS ---
-summary = con.execute("""
-    SELECT 
-        MIN(month) as earliest_month, 
-        MAX(month) as latest_month, 
-        COUNT(*) as total_crimes 
-    FROM 'combined_crime_data.parquet'
-""").fetchall()
 
-print(f"\nFinal Dataset Summary:")
-print(f"Time Range: {summary[0][0]} to {summary[0][1]}")
-print(f"Total Rows Processed: {summary[0][2]:,}")
+# %% Run download function and unzip as we go
+
+if get_data:
+    # get any new zip files available from the archive site
+    # checking against previously unzipped downloads in 
+    # 'out_dir'
+    print('----------------------------------------------')
+    print("Checking for new archive files to download...")
+    download_archives()
+    print('----------------------------------------------')
+    # now unzip any downloads 
+    print(f"Processing archive files in {data_dir}...")
+
+    # Find all zip files
+    zip_files: list[str] = glob.glob(pathname=os.path.join(data_dir, "*.zip"))
+
+    if not zip_files:
+        print("No zip files found to process.")
+
+    for zip_file_path in zip_files:
+        try:
+            print(f"Extracting {os.path.basename(zip_file_path)}...")
+            with zipfile.ZipFile(file=zip_file_path, mode='r') as zip_ref:
+                zip_ref.extractall(path=out_dir)
+            
+            # Successfully extracted, now safely remove
+            if del_archive_zips:
+                os.remove(zip_file_path)
+                print(f"Successfully extracted and removed {os.path.basename(zip_file_path)}")
+            
+        except zipfile.BadZipFile:
+            print(f"Error: {os.path.basename(zip_file_path)} is corrupted. Skipping.")
+        except Exception as e:
+            print(f"An unexpected error occurred with {os.path.basename(zip_file_path)}: {e}")
+
+    print('----------------------------------------------')
+    print('Finished processing archive files.')
+    print('----------------------------------------------')
+
+    
+
+# ===============================================================================================#
+# %%  Duck DB update routine
+# Ingest archived data into local duckdb database
+
+## Helper Functions
+def mark_as_processed(file_name):
+    """Record a file as processed."""
+    with open(log_file, mode='a') as f:
+        f.write(f"{file_name}\n")
+
+def initialize_database(con, example_file_path:str|os.PathLike):
+    # make a table with the correct schema if it doesn't exist
+    # CRIME ID as primary key to ensure unique 
+    # contraint for fast index    
+    con.execute("""CREATE TABLE IF NOT EXISTS street_data ("Crime ID" VARCHAR PRIMARY KEY,
+                                             "Month" VARCHAR,
+                                             "Reported by" VARCHAR,
+                                             "Falls within" VARCHAR,
+                                             "Longitude" DOUBLE,
+                                             "Latitude" DOUBLE,
+                                             "Location" VARCHAR,
+                                             "LSOA code" VARCHAR,
+                                             "LSOA name" VARCHAR,
+                                             "Crime type" VARCHAR,
+                                             "Last outcome category" VARCHAR,
+                                             "Context" VARCHAR);""")
+
+# %%
+
+def update_duckdb(csv_paths:list[str]):
+    # put database at top level of data_dir
+    con: DuckDBPyConnection = duckdb.connect(database=data_dir/'crime_archive.db')
+    # Set memory limits and temp, to avoid crashing
+    con.execute(query="SET memory_limit='7GB'")
+    con.execute(query="SET streaming_buffer_size = '4GB';")
+    con.execute(query="SET preserve_insertion_order = false;")
+    #enable a temp memory space to allow duckdb to spill to local
+    con.execute(query=f"""SET temp_directory = '{temp_dir_path}';""")
+    # create the datatable if it doesn't exist  
+    # Use the first CSV to initialize the table structure
+    initialize_database(con, example_file_path=csv_paths[0]) 
+    # Now ingest data from each CSV, skipping those already logged
+    for csv_path in csv_paths:
+        file_name: str = os.path.basename(csv_path)
+        # Skip if already logged
+        if is_already_processed(file_name):
+            continue
+            
+        print(f"Ingesting {file_name}...")
+        # manually dedupe in chunks as not enough local RAM to form primary key :S
+        try:
+            query = """INSERT INTO street_data
+                        SELECT 
+                         -- Manually deal with Crime ID (either use theirs or make a synthetic one if missing)
+                        COALESCE(NULLIF("Crime ID", ''), 'NO_ID_' || uuid()) AS "Crime ID",
+                        * EXCLUDE ("Crime ID")
+                        FROM read_csv_auto(?, union_by_name=True) AS new_data
+                        WHERE NOT EXISTS (SELECT 1 
+                                            FROM street_data AS existing 
+                                            WHERE existing."Crime ID" = new_data."Crime ID");"""
+            con.execute(query,parameters=[str(object=csv_path)])
+            print(f"Processed {file_name}...")
+            mark_as_processed(file_name)
+            # delete the csv
+            os.remove(csv_path)
+            # pause, dont hammer the server because that is just rude. 
+            time.sleep(2)
+        except Exception as e:
+            print(f"Failed to process {file_name}: {e}")
+            # pause, as above. 
+            time.sleep(2)
+    # remove duplicates (crimes updated)
+    try:
+        con.execute(query="""CREATE OR REPLACE TABLE cleaned_street_data AS
+                            SELECT * EXCLUDE row_num
+                            FROM (SELECT *, ROW_NUMBER() 
+                                    OVER (PARTITION BY "CRIME ID" 
+                                    ORDER BY "Month" DESC) as row_num
+                                  FROM street_data)
+                            WHERE row_num = 1;""")
+        # if successfully cleaned swap out data
+        try:  
+            con.execute(query="DROP TABLE street_data;")
+            con.execute(query="ALTER TABLE cleaned_street_data RENAME TO street_data;")
+        except Exception as e:
+            print(f"street_data failed to dedup and update: {e}")
+    except Exception as e:
+        print(f"Failed to remove duplicates: {e}")
+    # All done and made it to the end so close
+    con.close()
+
+
+# Now run duckdb update on all csvs in out_dir
+# checking against the log file to avoid duplicates
+
+# find all *-street.csv files in the out_dir and its subdirectories
+csv_files_list: list[str] = glob.glob(pathname=os.path.join(data_dir, "**", "*-street.csv"), recursive=True)
+
+## Run database update
+print("Found "+str(object=len(csv_files_list))+" csv files")
+
+# %%  Duck DB update routine
+
+# Run Update (only is new csvs are found)
+if len(csv_files_list) > 0:
+    print("Updating duckdb database with new csv files...")
+    update_duckdb(csv_paths=csv_files_list)
+    print("=== Finished updating duckdb database ===")
+
+# ===============================================================================================#

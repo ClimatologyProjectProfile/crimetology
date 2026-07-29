@@ -1,0 +1,20 @@
+# --- VS Code Specific ---
+.vscode/
+*.code-workspace
+.history/
+
+# --- System & OS ---
+.DS_Store
+Thumbs.db
+
+# --- Logs & Temp ---
+*.log
+*.tmp
+*.pyc
+
+
+# --- Data Files ---
+data/*  
+*.csv
+*.nc
+*.cdf
