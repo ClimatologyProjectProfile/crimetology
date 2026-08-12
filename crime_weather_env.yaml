@@ -21,3 +21,5 @@ dependencies:
   - dask
   - beautifulsoup4
   - plotly
+  - fast_hdbscan
+  - scikit-learn-intelex
