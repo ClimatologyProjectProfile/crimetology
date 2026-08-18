@@ -58,7 +58,7 @@ var_list: list[str] = [#'airfrost',      #
 
 # %% Setup directories and paths
 cwd: str = os.getcwd()
-data_dir: Path = Path(cwd) / 'data' / 'ceda' / 'raw' 
+data_dir: Path = Path(cwd).parent / 'data' / 'ceda' / 'raw' 
 # create a log file to track which cdfs
 # have been downloaded
 log_file: Path = data_dir / 'dowloaded_cdfs.txt'
