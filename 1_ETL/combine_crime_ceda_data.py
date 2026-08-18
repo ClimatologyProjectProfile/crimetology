@@ -34,9 +34,9 @@ import duckdb
 ############################################################
 # %% Setup directories and paths
 cwd: str = os.getcwd()
-crime_data_dir: Path = Path(cwd) / 'data' / 'police_archives'
+crime_data_dir: Path = Path(cwd).parent / 'data' / 'police_archives'
 crime_db: Path = crime_data_dir/'crime_archive.db'
-weather_data_dir: Path = Path(cwd) / 'data' / 'ceda' / 'raw'
+weather_data_dir: Path = Path(cwd).parent / 'data' / 'ceda' / 'raw'
 
 
 ############################################################

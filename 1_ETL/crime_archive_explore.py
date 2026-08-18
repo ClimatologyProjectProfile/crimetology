@@ -21,7 +21,7 @@ from pyproj import Transformer
 ############################################################
 # %% Setup directories and paths
 cwd: str = os.getcwd()
-data_dir: Path = Path(cwd) / 'data' / 'police_archives'
+data_dir: Path = Path(cwd).parent / 'data' / 'police_archives'
 crime_db: Path = data_dir/'crime_archive.db'
 
 

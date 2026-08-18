@@ -12,7 +12,7 @@
 #  large data sets, but it is a simple approach to get started.   
 #  Needs to be improved for future runs/batched.
 #
-# 22/06/2026 - Data spanning  2010-12 to 2016-04 uploaded to 
+# 22/06/2026 - Data spanning  2010-12 to 2026-04 uploaded to 
 # an open access Zenodo repo https://doi.org/10.5281/zenodo.20798154
 #######################################################################
 
@@ -46,14 +46,14 @@ del_archive_zips = True
 # Get the current working directory
 cwd: str = os.getcwd()
 
-temp_dir_path: Path = Path(cwd) / ' temp_dir.tmp' 
+temp_dir_path: Path = Path(cwd).parent / ' temp_dir.tmp' 
 
 #data dir for archives downloads (zips)
-data_dir: Path = Path(cwd) / 'data' / 'police_archives'
+data_dir: Path = Path(cwd).parent / 'data' / 'police_archives'
 data_dir.mkdir(parents=True, exist_ok=True)
 
 # set the unzip location
-out_dir: Path = Path(cwd) / 'data' / 'police_archives' / 'csvs'
+out_dir: Path = Path(cwd).parent / 'data' / 'police_archives' / 'csvs'
 out_dir.mkdir(parents=True, exist_ok=True)
 
 # create a log file to track which csvs
